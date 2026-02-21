@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Calendar, MessageSquare, Bell, LogOut, ExternalLink, Loader2, Send } from 'lucide-react';
+import { Calendar, MessageSquare, Bell, LogOut, ExternalLink, Loader2, Send, Users } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,7 +87,7 @@ const Dashboard = () => {
 
   const saveWhatsappNumber = async () => {
     if (!whatsappNumber || whatsappNumber.length < 8) {
-      showError("Please enter a valid WhatsApp number with country code.");
+      showError("Please enter a valid number with country code.");
       return;
     }
     
@@ -103,15 +103,13 @@ const Dashboard = () => {
 
       if (error) throw error;
       
-      showSuccess("WhatsApp number updated!");
+      showSuccess("Destination updated!");
       
-      // Trigger welcome message
       await supabase.functions.invoke('calendar-bot', {
         body: { action: 'welcome', userId: user?.id }
       });
       
     } catch (error) {
-      console.error("Save error:", error);
       showError("Failed to update profile.");
     } finally {
       setSaving(false);
@@ -120,7 +118,7 @@ const Dashboard = () => {
 
   const handleSendTest = async () => {
     if (!isConnected || !whatsappNumber) {
-      showError("Please connect Google and set your WhatsApp number first.");
+      showError("Please connect Google and set your destination number first.");
       return;
     }
 
@@ -131,9 +129,8 @@ const Dashboard = () => {
       });
 
       if (error) throw error;
-      showSuccess("Test message sent! Check your WhatsApp.");
+      showSuccess("Test message sent!");
     } catch (error) {
-      console.error("Test error:", error);
       showError("Failed to send test message.");
     } finally {
       setTesting(false);
@@ -200,15 +197,15 @@ const Dashboard = () => {
 
               <Card className="border-none shadow-sm overflow-hidden">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-xs font-bold text-slate-400 uppercase tracking-widest">WhatsApp Status</CardTitle>
+                  <CardTitle className="text-xs font-bold text-slate-400 uppercase tracking-widest">Destination</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className={`p-2 rounded-lg ${whatsappNumber ? 'bg-green-100' : 'bg-slate-100'}`}>
-                        <MessageSquare className={`w-5 h-5 ${whatsappNumber ? 'text-green-600' : 'text-slate-400'}`} />
+                        <Users className={`w-5 h-5 ${whatsappNumber ? 'text-green-600' : 'text-slate-400'}`} />
                       </div>
-                      <span className="font-semibold text-slate-700">{whatsappNumber ? "Configured" : "Pending"}</span>
+                      <span className="font-semibold text-slate-700">{whatsappNumber ? "Set" : "Pending"}</span>
                     </div>
                     <Badge variant="outline" className={whatsappNumber ? "text-green-600 border-green-200 bg-green-50" : "text-amber-600 border-amber-200 bg-amber-50"}>
                       {whatsappNumber ? "Ready" : "Action Required"}
@@ -239,7 +236,7 @@ const Dashboard = () => {
               <Card className="border-none shadow-sm">
                 <CardHeader>
                   <CardTitle>Schedule Preview</CardTitle>
-                  <CardDescription>This is how your daily message will look on WhatsApp.</CardDescription>
+                  <CardDescription>This is how your daily message will look.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="bg-slate-900 text-slate-100 p-6 rounded-2xl font-mono text-sm shadow-lg">
@@ -264,7 +261,7 @@ const Dashboard = () => {
                 <div>
                   <CardTitle>Test Integration</CardTitle>
                   <CardDescription className="mt-2">
-                    Send a real message to your WhatsApp right now to verify everything is working.
+                    Send a real message to your destination right now.
                   </CardDescription>
                 </div>
                 <Button 
@@ -283,12 +280,12 @@ const Dashboard = () => {
             <Card className="border-none shadow-sm">
               <CardHeader>
                 <CardTitle>Configuration</CardTitle>
-                <CardDescription>Link your accounts to start receiving updates.</CardDescription>
+                <CardDescription>Set where you want to receive your schedules.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-8">
                 <div className="space-y-4">
                   <div className="grid gap-3">
-                    <Label htmlFor="whatsapp" className="text-slate-700 font-semibold">WhatsApp Phone Number</Label>
+                    <Label htmlFor="whatsapp" className="text-slate-700 font-semibold">Destination WhatsApp Number</Label>
                     <div className="flex flex-col sm:flex-row gap-3">
                       <Input 
                         id="whatsapp" 
@@ -299,16 +296,16 @@ const Dashboard = () => {
                       />
                       <Button onClick={saveWhatsappNumber} disabled={saving} className="rounded-xl h-11 px-6">
                         {saving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                        {saving ? "Saving..." : "Save Number"}
+                        {saving ? "Saving..." : "Save Destination"}
                       </Button>
                     </div>
-                    <p className="text-xs text-slate-500">Include country code (e.g., +1 for USA, +44 for UK).</p>
+                    <p className="text-xs text-slate-500">Enter your phone number with country code. You can then forward these messages to your group.</p>
                   </div>
                 </div>
 
                 <div className="pt-6 border-t">
                   <Label className="text-base font-semibold text-slate-700 block mb-2">Google Calendar Access</Label>
-                  <p className="text-sm text-slate-500 mb-6">We need read-only access to your primary calendar to send you schedule updates.</p>
+                  <p className="text-sm text-slate-500 mb-6">We need read-only access to your primary calendar.</p>
                   <Button 
                     variant={isConnected ? "outline" : "default"} 
                     onClick={handleConnectGoogle}
