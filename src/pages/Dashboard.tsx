@@ -1,7 +1,7 @@
 "use client";
 
-import React from 'react';
-import { Calendar, MessageSquare, Settings, Bell, CheckCircle2, AlertCircle } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Calendar, MessageSquare, Settings, Bell, CheckCircle2, AlertCircle, LogOut } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,10 +9,61 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/components/AuthProvider';
+import { showSuccess, showError } from '@/utils/toast';
 
 const Dashboard = () => {
-  const [isConnected, setIsConnected] = React.useState(false);
-  const [whatsappNumber, setWhatsappNumber] = React.useState("");
+  const { user } = useAuth();
+  const [isConnected, setIsConnected] = useState(false);
+  const [whatsappNumber, setWhatsappNumber] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (user) {
+      fetchProfile();
+    }
+  }, [user]);
+
+  const fetchProfile = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user?.id)
+        .single();
+
+      if (error) throw error;
+      if (data) {
+        setWhatsappNumber(data.whatsapp_number || "");
+        setIsConnected(!!data.google_access_token);
+      }
+    } catch (error) {
+      console.error('Error fetching profile:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveWhatsappNumber = async () => {
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ whatsapp_number: whatsappNumber })
+        .eq('id', user?.id);
+
+      if (error) throw error;
+      showSuccess("WhatsApp number updated successfully!");
+    } catch (error) {
+      showError("Failed to update WhatsApp number.");
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">
@@ -20,12 +71,15 @@ const Dashboard = () => {
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900">Calendar Assistant</h1>
-            <p className="text-slate-500">Manage your automated WhatsApp schedule updates.</p>
+            <p className="text-slate-500">Welcome back, {user?.email}</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-4">
             <Badge variant={isConnected ? "default" : "secondary"} className="px-3 py-1">
               {isConnected ? "Bot Active" : "Bot Paused"}
             </Badge>
+            <Button variant="ghost" size="sm" onClick={handleLogout} className="text-slate-500">
+              <LogOut className="w-4 h-4 mr-2" /> Sign Out
+            </Button>
           </div>
         </header>
 
@@ -50,8 +104,8 @@ const Dashboard = () => {
                       </div>
                       <span className="font-semibold">{isConnected ? "Connected" : "Not Linked"}</span>
                     </div>
-                    <Button variant="outline" size="sm" onClick={() => setIsConnected(!isConnected)}>
-                      {isConnected ? "Disconnect" : "Connect"}
+                    <Button variant="outline" size="sm">
+                      {isConnected ? "Reconnect" : "Connect"}
                     </Button>
                   </div>
                 </CardContent>
@@ -69,7 +123,9 @@ const Dashboard = () => {
                       </div>
                       <span className="font-semibold">{whatsappNumber ? "Configured" : "Pending"}</span>
                     </div>
-                    <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50">Ready</Badge>
+                    <Badge variant="outline" className={whatsappNumber ? "text-green-600 border-green-200 bg-green-50" : "text-amber-600 border-amber-200 bg-amber-50"}>
+                      {whatsappNumber ? "Ready" : "Action Required"}
+                    </Badge>
                   </div>
                 </CardContent>
               </Card>
@@ -132,13 +188,6 @@ const Dashboard = () => {
                     </div>
                     <Switch defaultChecked />
                   </div>
-                  <div className="flex items-center justify-between p-4 border rounded-lg">
-                    <div className="space-y-0.5">
-                      <Label className="text-base">Interactive Chat</Label>
-                      <p className="text-sm text-slate-500">Allow asking questions about your schedule via WhatsApp.</p>
-                    </div>
-                    <Switch defaultChecked />
-                  </div>
                 </div>
 
                 <div className="space-y-4 pt-4">
@@ -152,8 +201,9 @@ const Dashboard = () => {
                         onChange={(e) => setWhatsappNumber(e.target.value)}
                         className="max-w-sm"
                       />
-                      <Button>Save Number</Button>
+                      <Button onClick={saveWhatsappNumber}>Save Number</Button>
                     </div>
+                    <p className="text-xs text-slate-500">Include country code (e.g., +1 for USA).</p>
                   </div>
                 </div>
               </CardContent>
@@ -168,26 +218,7 @@ const Dashboard = () => {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {[
-                    { time: "Today, 07:00", event: "Daily schedule sent", status: "success" },
-                    { time: "Yesterday, 22:15", event: "User asked: 'What's my first meeting tomorrow?'", status: "info" },
-                    { time: "Yesterday, 07:00", event: "Daily schedule sent", status: "success" },
-                    { time: "Sat, 21:00", event: "Weekly overview sent", status: "success" },
-                  ].map((log, i) => (
-                    <div key={i} className="flex items-center justify-between py-3 border-b last:border-0">
-                      <div className="flex items-center gap-3">
-                        {log.status === 'success' ? (
-                          <CheckCircle2 className="w-4 h-4 text-green-500" />
-                        ) : (
-                          <AlertCircle className="w-4 h-4 text-blue-500" />
-                        )}
-                        <div>
-                          <p className="text-sm font-medium">{log.event}</p>
-                          <p className="text-xs text-slate-500">{log.time}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                  <p className="text-sm text-slate-500 italic">Activity logs will appear here once the bot starts sending messages.</p>
                 </div>
               </CardContent>
             </Card>
