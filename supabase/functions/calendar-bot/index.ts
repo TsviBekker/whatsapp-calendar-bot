@@ -7,85 +7,118 @@ const corsHeaders = {
 }
 
 serve(async (req) => {
-  // Handle CORS
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
 
   try {
     const { action, userId } = await req.json();
-    console.log(`[calendar-bot] Received action: ${action} for user: ${userId}`);
+    console.log(`[calendar-bot] Action: ${action}, User: ${userId}`);
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Fetch user profile to get the WhatsApp number
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('whatsapp_number')
+      .select('*')
       .eq('id', userId)
       .single();
 
     if (profileError || !profile?.whatsapp_number) {
-      console.error("[calendar-bot] Profile error or no number found", profileError);
-      return new Response(JSON.stringify({ error: "No WhatsApp number found for user" }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
+      return new Response(JSON.stringify({ error: "Profile or number missing" }), { status: 400, headers: corsHeaders });
     }
 
-    // Clean the phone number (remove +, spaces, etc)
     const cleanNumber = profile.whatsapp_number.replace(/\D/g, '');
-    
     let messageText = "";
+
     if (action === 'welcome') {
-      messageText = "👋 Welcome to Calendar Bot! I'll send your schedule here every morning at 7:00 AM.";
+      messageText = "👋 Welcome! I'm your Calendar Assistant. I'll send your schedule here daily.";
     } else if (action === 'test') {
-      messageText = "🚀 This is a test message from your Calendar Bot! If you see this, your integration is working perfectly.";
+      messageText = "🚀 Test successful! Your WhatsApp integration is working.";
+    } else if (action === 'daily' || action === 'weekly') {
+      if (!profile.google_access_token) {
+        messageText = "❌ Please connect your Google Calendar in the dashboard first.";
+      } else {
+        const events = await fetchCalendarEvents(profile.google_access_token, action);
+        messageText = formatEventsMessage(events, action);
+      }
     }
 
     const result = await sendWhatsAppMessage(cleanNumber, messageText);
-    console.log("[calendar-bot] WhatsApp API result", result);
-
-    return new Response(JSON.stringify(result), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 200,
-    });
+    return new Response(JSON.stringify(result), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    console.error("[calendar-bot] Unexpected error", error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 500,
-    });
+    console.error("[calendar-bot] Error:", error);
+    return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: corsHeaders });
   }
 })
 
-async function sendWhatsAppMessage(to: string, text: string) {
-  const WHATSAPP_API_KEY = Deno.env.get('WHATSAPP_API_KEY');
-  const WHATSAPP_PHONE_NUMBER_ID = Deno.env.get('WHATSAPP_PHONE_NUMBER_ID');
+async function fetchCalendarEvents(token: string, type: 'daily' | 'weekly') {
+  const now = new Date();
+  const timeMin = now.toISOString();
+  const end = new Date();
   
-  if (!WHATSAPP_API_KEY || !WHATSAPP_PHONE_NUMBER_ID) {
-    throw new Error("Missing WhatsApp API credentials in Supabase secrets");
+  if (type === 'daily') {
+    end.setHours(23, 59, 59, 999);
+  } else {
+    end.setDate(now.getDate() + 7);
+  }
+  const timeMax = end.toISOString();
+
+  const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`;
+  
+  const res = await fetch(url, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    console.error("[calendar-bot] Google API Error", err);
+    throw new Error("Failed to fetch calendar events");
   }
 
-  const url = `https://graph.facebook.com/v17.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  const data = await res.json();
+  return data.items || [];
+}
+
+function formatEventsMessage(events: any[], type: 'daily' | 'weekly') {
+  if (events.length === 0) {
+    return type === 'daily' 
+      ? "📅 You have a clear schedule for today! Enjoy your day. ✨" 
+      : "📅 No events found for the upcoming week.";
+  }
+
+  let msg = type === 'daily' ? "📅 *Today's Schedule:*\n\n" : "📅 *Weekly Overview:*\n\n";
+  
+  events.forEach((event: any) => {
+    const start = new Date(event.start.dateTime || event.start.date);
+    const timeStr = event.start.dateTime 
+      ? start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+      : "All Day";
+    
+    const dateStr = type === 'weekly' ? `${start.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} | ` : "";
+    msg += `• ${dateStr}${timeStr}: ${event.summary}\n`;
+  });
+
+  return msg;
+}
+
+async function sendWhatsAppMessage(to: string, text: string) {
+  const key = Deno.env.get('WHATSAPP_API_KEY');
+  const id = Deno.env.get('WHATSAPP_PHONE_NUMBER_ID');
+  const url = `https://graph.facebook.com/v17.0/${id}/messages`;
   
   const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${WHATSAPP_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messaging_product: "whatsapp",
-      to: to,
+      to,
       type: "text",
       text: { body: text }
     })
   });
-  
   return await res.json();
 }

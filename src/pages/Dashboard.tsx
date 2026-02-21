@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Calendar, MessageSquare, Bell, LogOut, ExternalLink, Loader2, Send, Users } from 'lucide-react';
+import { Calendar, MessageSquare, Bell, LogOut, ExternalLink, Loader2, Send, Users, Clock, CalendarDays } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,12 +16,10 @@ const Dashboard = () => {
   const [whatsappNumber, setWhatsappNumber] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   useEffect(() => {
-    if (user) {
-      fetchProfile();
-    }
+    if (user) fetchProfile();
   }, [user]);
 
   useEffect(() => {
@@ -47,14 +45,8 @@ const Dashboard = () => {
 
   const fetchProfile = async () => {
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user?.id)
-        .single();
-
+      const { data, error } = await supabase.from('profiles').select('*').eq('id', user?.id).single();
       if (error && error.code !== 'PGRST116') throw error;
-      
       if (data) {
         setWhatsappNumber(data.whatsapp_number || "");
         setIsConnected(!!data.google_access_token);
@@ -73,10 +65,7 @@ const Dashboard = () => {
         options: {
           scopes: 'https://www.googleapis.com/auth/calendar.readonly',
           redirectTo: window.location.origin + '/dashboard',
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
-          }
+          queryParams: { access_type: 'offline', prompt: 'consent' }
         }
       });
       if (error) throw error;
@@ -90,25 +79,16 @@ const Dashboard = () => {
       showError("Please enter a valid number with country code.");
       return;
     }
-    
     setSaving(true);
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .upsert({ 
-          id: user?.id, 
-          whatsapp_number: whatsappNumber,
-          updated_at: new Date().toISOString()
-        });
-
-      if (error) throw error;
-      
-      showSuccess("Destination updated!");
-      
-      await supabase.functions.invoke('calendar-bot', {
-        body: { action: 'welcome', userId: user?.id }
+      const { error } = await supabase.from('profiles').upsert({ 
+        id: user?.id, 
+        whatsapp_number: whatsappNumber,
+        updated_at: new Date().toISOString()
       });
-      
+      if (error) throw error;
+      showSuccess("Destination updated!");
+      await supabase.functions.invoke('calendar-bot', { body: { action: 'welcome', userId: user?.id } });
     } catch (error) {
       showError("Failed to update profile.");
     } finally {
@@ -116,24 +96,20 @@ const Dashboard = () => {
     }
   };
 
-  const handleSendTest = async () => {
+  const triggerAction = async (action: string) => {
     if (!isConnected || !whatsappNumber) {
-      showError("Please connect Google and set your destination number first.");
+      showError("Please complete setup first.");
       return;
     }
-
-    setTesting(true);
+    setActionLoading(action);
     try {
-      const { data, error } = await supabase.functions.invoke('calendar-bot', {
-        body: { action: 'test', userId: user?.id }
-      });
-
+      const { error } = await supabase.functions.invoke('calendar-bot', { body: { action, userId: user?.id } });
       if (error) throw error;
-      showSuccess("Test message sent!");
+      showSuccess(`${action.charAt(0).toUpperCase() + action.slice(1)} schedule sent!`);
     } catch (error) {
-      showError("Failed to send test message.");
+      showError(`Failed to send ${action} schedule.`);
     } finally {
-      setTesting(false);
+      setActionLoading(null);
     }
   };
 
@@ -176,57 +152,49 @@ const Dashboard = () => {
 
           <TabsContent value="overview" className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <Card className="border-none shadow-sm overflow-hidden">
+              <Card className="border-none shadow-sm">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-xs font-bold text-slate-400 uppercase tracking-widest">Google Calendar</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg ${isConnected ? 'bg-blue-100' : 'bg-slate-100'}`}>
-                        <Calendar className={`w-5 h-5 ${isConnected ? 'text-blue-600' : 'text-slate-400'}`} />
-                      </div>
-                      <span className="font-semibold text-slate-700">{isConnected ? "Connected" : "Not Linked"}</span>
+                <CardContent className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${isConnected ? 'bg-blue-100' : 'bg-slate-100'}`}>
+                      <Calendar className={`w-5 h-5 ${isConnected ? 'text-blue-600' : 'text-slate-400'}`} />
                     </div>
-                    <Button variant={isConnected ? "outline" : "default"} size="sm" onClick={handleConnectGoogle}>
-                      {isConnected ? "Reconnect" : "Connect"}
-                    </Button>
+                    <span className="font-semibold text-slate-700">{isConnected ? "Connected" : "Not Linked"}</span>
                   </div>
+                  <Button variant="outline" size="sm" onClick={handleConnectGoogle}>{isConnected ? "Reconnect" : "Connect"}</Button>
                 </CardContent>
               </Card>
 
-              <Card className="border-none shadow-sm overflow-hidden">
+              <Card className="border-none shadow-sm">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-xs font-bold text-slate-400 uppercase tracking-widest">Destination</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg ${whatsappNumber ? 'bg-green-100' : 'bg-slate-100'}`}>
-                        <Users className={`w-5 h-5 ${whatsappNumber ? 'text-green-600' : 'text-slate-400'}`} />
-                      </div>
-                      <span className="font-semibold text-slate-700">{whatsappNumber ? "Set" : "Pending"}</span>
+                <CardContent className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${whatsappNumber ? 'bg-green-100' : 'bg-slate-100'}`}>
+                      <Users className={`w-5 h-5 ${whatsappNumber ? 'text-green-600' : 'text-slate-400'}`} />
                     </div>
-                    <Badge variant="outline" className={whatsappNumber ? "text-green-600 border-green-200 bg-green-50" : "text-amber-600 border-amber-200 bg-amber-50"}>
-                      {whatsappNumber ? "Ready" : "Action Required"}
-                    </Badge>
+                    <span className="font-semibold text-slate-700">{whatsappNumber ? "Set" : "Pending"}</span>
                   </div>
+                  <Badge variant="outline" className={whatsappNumber ? "text-green-600 border-green-200 bg-green-50" : "text-amber-600 border-amber-200 bg-amber-50"}>
+                    {whatsappNumber ? "Ready" : "Action Required"}
+                  </Badge>
                 </CardContent>
               </Card>
 
-              <Card className="border-none shadow-sm overflow-hidden">
+              <Card className="border-none shadow-sm">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-xs font-bold text-slate-400 uppercase tracking-widest">Next Update</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-purple-100 rounded-lg">
-                      <Bell className="w-5 h-5 text-purple-600" />
-                    </div>
-                    <div>
-                      <p className="font-semibold text-slate-900">Tomorrow, 07:00</p>
-                      <p className="text-xs text-slate-500">Daily Schedule</p>
-                    </div>
+                <CardContent className="flex items-center gap-3">
+                  <div className="p-2 bg-purple-100 rounded-lg">
+                    <Bell className="w-5 h-5 text-purple-600" />
+                  </div>
+                  <div>
+                    <p className="font-semibold text-slate-900">Tomorrow, 07:00</p>
+                    <p className="text-xs text-slate-500">Daily Schedule</p>
                   </div>
                 </CardContent>
               </Card>
@@ -235,42 +203,45 @@ const Dashboard = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Card className="border-none shadow-sm">
                 <CardHeader>
-                  <CardTitle>Schedule Preview</CardTitle>
-                  <CardDescription>This is how your daily message will look.</CardDescription>
+                  <CardTitle>On-Demand Updates</CardTitle>
+                  <CardDescription>Trigger a manual update to your WhatsApp right now.</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <div className="bg-slate-900 text-slate-100 p-6 rounded-2xl font-mono text-sm shadow-lg">
-                    <div className="flex items-center gap-2 mb-4 border-b border-slate-800 pb-2">
-                      <div className="w-2 h-2 rounded-full bg-green-500" />
-                      <p className="text-slate-400 text-xs uppercase tracking-wider">WhatsApp • 07:00 AM</p>
-                    </div>
-                    <div className="space-y-2">
-                      <p className="text-blue-400">📅 Today's Schedule:</p>
-                      <p>07:00-08:00 workout</p>
-                      <p>09:30-11:00 meeting about X at work</p>
-                      <p>18:00-21:00 date night with fiance</p>
-                    </div>
-                  </div>
+                <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <Button 
+                    onClick={() => triggerAction('daily')} 
+                    disabled={!!actionLoading || !isConnected || !whatsappNumber}
+                    className="h-24 flex flex-col gap-2 rounded-2xl bg-blue-600 hover:bg-blue-700"
+                  >
+                    {actionLoading === 'daily' ? <Loader2 className="w-6 h-6 animate-spin" /> : <Clock className="w-6 h-6" />}
+                    <span>Send Daily Schedule</span>
+                  </Button>
+                  <Button 
+                    onClick={() => triggerAction('weekly')} 
+                    disabled={!!actionLoading || !isConnected || !whatsappNumber}
+                    className="h-24 flex flex-col gap-2 rounded-2xl bg-purple-600 hover:bg-purple-700"
+                  >
+                    {actionLoading === 'weekly' ? <Loader2 className="w-6 h-6 animate-spin" /> : <CalendarDays className="w-6 h-6" />}
+                    <span>Send Weekly Recap</span>
+                  </Button>
                 </CardContent>
               </Card>
 
               <Card className="border-none shadow-sm flex flex-col justify-center items-center p-8 text-center space-y-4">
-                <div className="p-4 bg-blue-50 rounded-full">
-                  <Send className="w-8 h-8 text-blue-600" />
+                <div className="p-4 bg-green-50 rounded-full">
+                  <Send className="w-8 h-8 text-green-600" />
                 </div>
                 <div>
-                  <CardTitle>Test Integration</CardTitle>
-                  <CardDescription className="mt-2">
-                    Send a real message to your destination right now.
-                  </CardDescription>
+                  <CardTitle>Test Connection</CardTitle>
+                  <CardDescription className="mt-2">Send a simple ping to verify your WhatsApp setup.</CardDescription>
                 </div>
                 <Button 
-                  onClick={handleSendTest} 
-                  disabled={testing || !isConnected || !whatsappNumber}
+                  variant="outline"
+                  onClick={() => triggerAction('test')} 
+                  disabled={!!actionLoading || !isConnected || !whatsappNumber}
                   className="w-full max-w-xs rounded-xl h-12"
                 >
-                  {testing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />}
-                  {testing ? "Sending..." : "Send Test Message"}
+                  {actionLoading === 'test' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />}
+                  Send Test Ping
                 </Button>
               </Card>
             </div>
