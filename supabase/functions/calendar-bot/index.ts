@@ -56,6 +56,15 @@ serve(async (req) => {
     const body = await req.json();
     console.log("[calendar-bot] Received request", body);
 
+    // Handle Welcome Message
+    if (body.action === 'welcome' && body.userId) {
+      const { data: user } = await supabase.from('profiles').select('*').eq('id', body.userId).single();
+      if (user?.whatsapp_number) {
+        await sendWhatsAppMessage(user.whatsapp_number, `✅ Connected! Your WhatsApp is now linked to your Calendar Assistant. You'll receive your daily schedule here at 7:00 AM.`);
+        return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+      }
+    }
+
     // Handle direct test trigger from Dashboard
     if (body.action === 'test' && body.userId) {
       const { data: user } = await supabase.from('profiles').select('*').eq('id', body.userId).single();

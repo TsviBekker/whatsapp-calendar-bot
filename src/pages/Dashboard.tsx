@@ -102,8 +102,16 @@ const Dashboard = () => {
         });
 
       if (error) throw error;
+      
       showSuccess("WhatsApp number updated!");
+      
+      // Trigger welcome message
+      await supabase.functions.invoke('calendar-bot', {
+        body: { action: 'welcome', userId: user?.id }
+      });
+      
     } catch (error) {
+      console.error("Save error:", error);
       showError("Failed to update profile.");
     } finally {
       setSaving(false);
@@ -126,7 +134,7 @@ const Dashboard = () => {
       showSuccess("Test message sent! Check your WhatsApp.");
     } catch (error) {
       console.error("Test error:", error);
-      showError("Failed to send test message. Check your WhatsApp API secrets in Supabase.");
+      showError("Failed to send test message.");
     } finally {
       setTesting(false);
     }
