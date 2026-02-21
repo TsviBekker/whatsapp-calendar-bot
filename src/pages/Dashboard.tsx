@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Calendar, MessageSquare, Bell, LogOut, ExternalLink } from 'lucide-react';
+import { Calendar, MessageSquare, Bell, LogOut, ExternalLink, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from '@/integrations/supabase/client';
@@ -23,6 +22,31 @@ const Dashboard = () => {
       fetchProfile();
     }
   }, [user]);
+
+  // Handle OAuth redirect tokens
+  useEffect(() => {
+    const handleOAuthTokens = async () => {
+      if (session?.provider_token && user) {
+        console.log("Detected Google tokens, saving to profile...");
+        const { error } = await supabase
+          .from('profiles')
+          .upsert({ 
+            id: user.id, 
+            google_access_token: session.provider_token,
+            google_refresh_token: session.provider_refresh_token,
+            updated_at: new Date().toISOString()
+          });
+        
+        if (error) {
+          console.error("Error saving tokens:", error);
+        } else {
+          setIsConnected(true);
+          showSuccess("Google Calendar connected!");
+        }
+      }
+    };
+    handleOAuthTokens();
+  }, [session, user]);
 
   const fetchProfile = async () => {
     try {
@@ -64,31 +88,9 @@ const Dashboard = () => {
     }
   };
 
-  // Check if we just returned from OAuth and have a provider token
-  useEffect(() => {
-    const updateTokens = async () => {
-      if (session?.provider_token && user) {
-        const { error } = await supabase
-          .from('profiles')
-          .upsert({ 
-            id: user.id, 
-            google_access_token: session.provider_token,
-            google_refresh_token: session.provider_refresh_token,
-            updated_at: new Date().toISOString()
-          });
-        
-        if (!error) {
-          setIsConnected(true);
-          showSuccess("Google Calendar connected!");
-        }
-      }
-    };
-    updateTokens();
-  }, [session, user]);
-
   const saveWhatsappNumber = async () => {
-    if (!whatsappNumber) {
-      showError("Please enter a valid WhatsApp number.");
+    if (!whatsappNumber || whatsappNumber.length < 8) {
+      showError("Please enter a valid WhatsApp number with country code.");
       return;
     }
     
@@ -103,9 +105,10 @@ const Dashboard = () => {
         });
 
       if (error) throw error;
-      showSuccess("WhatsApp number updated successfully!");
+      showSuccess("WhatsApp number updated!");
     } catch (error) {
-      showError("Failed to update WhatsApp number.");
+      console.error("Save error:", error);
+      showError("Failed to update. Make sure the 'profiles' table exists.");
     } finally {
       setSaving(false);
     }
@@ -115,7 +118,14 @@ const Dashboard = () => {
     await supabase.auth.signOut();
   };
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  if (loading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
+        <Loader2 className="w-8 h-8 text-blue-600 animate-spin mb-4" />
+        <p className="text-slate-500 font-medium">Loading your dashboard...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">
@@ -123,37 +133,37 @@ const Dashboard = () => {
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900">Calendar Assistant</h1>
-            <p className="text-slate-500">Welcome back, {user?.email}</p>
+            <p className="text-slate-500">Logged in as {user?.email}</p>
           </div>
           <div className="flex items-center gap-4">
             <Badge variant={isConnected && whatsappNumber ? "default" : "secondary"} className="px-3 py-1">
               {isConnected && whatsappNumber ? "Bot Active" : "Setup Incomplete"}
             </Badge>
-            <Button variant="ghost" size="sm" onClick={handleLogout} className="text-slate-500">
+            <Button variant="ghost" size="sm" onClick={handleLogout} className="text-slate-500 hover:text-red-600">
               <LogOut className="w-4 h-4 mr-2" /> Sign Out
             </Button>
           </div>
         </header>
 
         <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="bg-white border">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="settings">Settings</TabsTrigger>
+          <TabsList className="bg-white border p-1 rounded-xl">
+            <TabsTrigger value="overview" className="rounded-lg">Overview</TabsTrigger>
+            <TabsTrigger value="settings" className="rounded-lg">Settings</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <Card className="border-none shadow-sm">
+              <Card className="border-none shadow-sm overflow-hidden">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-slate-500 uppercase tracking-wider">Google Calendar</CardTitle>
+                  <CardTitle className="text-xs font-bold text-slate-400 uppercase tracking-widest">Google Calendar</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="p-2 bg-blue-100 rounded-lg">
-                        <Calendar className="w-5 h-5 text-blue-600" />
+                      <div className={`p-2 rounded-lg ${isConnected ? 'bg-blue-100' : 'bg-slate-100'}`}>
+                        <Calendar className={`w-5 h-5 ${isConnected ? 'text-blue-600' : 'text-slate-400'}`} />
                       </div>
-                      <span className="font-semibold">{isConnected ? "Connected" : "Not Linked"}</span>
+                      <span className="font-semibold text-slate-700">{isConnected ? "Connected" : "Not Linked"}</span>
                     </div>
                     <Button variant={isConnected ? "outline" : "default"} size="sm" onClick={handleConnectGoogle}>
                       {isConnected ? "Reconnect" : "Connect"}
@@ -162,17 +172,17 @@ const Dashboard = () => {
                 </CardContent>
               </Card>
 
-              <Card className="border-none shadow-sm">
+              <Card className="border-none shadow-sm overflow-hidden">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-slate-500 uppercase tracking-wider">WhatsApp Status</CardTitle>
+                  <CardTitle className="text-xs font-bold text-slate-400 uppercase tracking-widest">WhatsApp Status</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="p-2 bg-green-100 rounded-lg">
-                        <MessageSquare className="w-5 h-5 text-green-600" />
+                      <div className={`p-2 rounded-lg ${whatsappNumber ? 'bg-green-100' : 'bg-slate-100'}`}>
+                        <MessageSquare className={`w-5 h-5 ${whatsappNumber ? 'text-green-600' : 'text-slate-400'}`} />
                       </div>
-                      <span className="font-semibold">{whatsappNumber ? "Configured" : "Pending"}</span>
+                      <span className="font-semibold text-slate-700">{whatsappNumber ? "Configured" : "Pending"}</span>
                     </div>
                     <Badge variant="outline" className={whatsappNumber ? "text-green-600 border-green-200 bg-green-50" : "text-amber-600 border-amber-200 bg-amber-50"}>
                       {whatsappNumber ? "Ready" : "Action Required"}
@@ -181,9 +191,9 @@ const Dashboard = () => {
                 </CardContent>
               </Card>
 
-              <Card className="border-none shadow-sm">
+              <Card className="border-none shadow-sm overflow-hidden">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-slate-500 uppercase tracking-wider">Next Update</CardTitle>
+                  <CardTitle className="text-xs font-bold text-slate-400 uppercase tracking-widest">Next Update</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="flex items-center gap-3">
@@ -205,9 +215,13 @@ const Dashboard = () => {
                 <CardDescription>This is how your daily message will look on WhatsApp.</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="bg-slate-900 text-slate-100 p-6 rounded-xl font-mono text-sm max-w-md">
-                  <p className="text-slate-400 mb-2">WhatsApp Message • 07:00 AM</p>
-                  <div className="space-y-1">
+                <div className="bg-slate-900 text-slate-100 p-6 rounded-2xl font-mono text-sm max-w-md shadow-lg">
+                  <div className="flex items-center gap-2 mb-4 border-b border-slate-800 pb-2">
+                    <div className="w-2 h-2 rounded-full bg-green-500" />
+                    <p className="text-slate-400 text-xs uppercase tracking-wider">WhatsApp • 07:00 AM</p>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-blue-400">📅 Today's Schedule:</p>
                     <p>07:00-08:00 workout</p>
                     <p>09:30-11:00 meeting about X at work</p>
                     <p>18:00-21:00 date night with fiance</p>
@@ -223,30 +237,35 @@ const Dashboard = () => {
                 <CardTitle>Configuration</CardTitle>
                 <CardDescription>Link your accounts to start receiving updates.</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-6">
+              <CardContent className="space-y-8">
                 <div className="space-y-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="whatsapp">WhatsApp Phone Number</Label>
-                    <div className="flex gap-2">
+                  <div className="grid gap-3">
+                    <Label htmlFor="whatsapp" className="text-slate-700 font-semibold">WhatsApp Phone Number</Label>
+                    <div className="flex flex-col sm:flex-row gap-3">
                       <Input 
                         id="whatsapp" 
                         placeholder="+1234567890" 
                         value={whatsappNumber}
                         onChange={(e) => setWhatsappNumber(e.target.value)}
-                        className="max-w-sm"
+                        className="max-w-sm rounded-xl h-11"
                       />
-                      <Button onClick={saveWhatsappNumber} disabled={saving}>
+                      <Button onClick={saveWhatsappNumber} disabled={saving} className="rounded-xl h-11 px-6">
+                        {saving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                         {saving ? "Saving..." : "Save Number"}
                       </Button>
                     </div>
-                    <p className="text-xs text-slate-500">Include country code (e.g., +1 for USA).</p>
+                    <p className="text-xs text-slate-500">Include country code (e.g., +1 for USA, +44 for UK).</p>
                   </div>
                 </div>
 
-                <div className="pt-4 border-t">
-                  <Label className="text-base block mb-2">Google Calendar Access</Label>
-                  <p className="text-sm text-slate-500 mb-4">We need read-only access to your primary calendar to send you schedule updates.</p>
-                  <Button variant={isConnected ? "outline" : "default"} onClick={handleConnectGoogle}>
+                <div className="pt-6 border-t">
+                  <Label className="text-base font-semibold text-slate-700 block mb-2">Google Calendar Access</Label>
+                  <p className="text-sm text-slate-500 mb-6">We need read-only access to your primary calendar to send you schedule updates.</p>
+                  <Button 
+                    variant={isConnected ? "outline" : "default"} 
+                    onClick={handleConnectGoogle}
+                    className="rounded-xl h-11 px-6"
+                  >
                     {isConnected ? "Reconnect Google Account" : "Connect Google Calendar"}
                     <ExternalLink className="ml-2 w-4 h-4" />
                   </Button>
