@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Calendar, MessageSquare, Bell, LogOut, ExternalLink, Loader2 } from 'lucide-react';
+import { Calendar, MessageSquare, Bell, LogOut, ExternalLink, Loader2, Send } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,7 @@ const Dashboard = () => {
   const [whatsappNumber, setWhatsappNumber] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -23,11 +24,9 @@ const Dashboard = () => {
     }
   }, [user]);
 
-  // Handle OAuth redirect tokens
   useEffect(() => {
     const handleOAuthTokens = async () => {
       if (session?.provider_token && user) {
-        console.log("Detected Google tokens, saving to profile...");
         const { error } = await supabase
           .from('profiles')
           .upsert({ 
@@ -37,9 +36,7 @@ const Dashboard = () => {
             updated_at: new Date().toISOString()
           });
         
-        if (error) {
-          console.error("Error saving tokens:", error);
-        } else {
+        if (!error) {
           setIsConnected(true);
           showSuccess("Google Calendar connected!");
         }
@@ -107,10 +104,31 @@ const Dashboard = () => {
       if (error) throw error;
       showSuccess("WhatsApp number updated!");
     } catch (error) {
-      console.error("Save error:", error);
-      showError("Failed to update. Make sure the 'profiles' table exists.");
+      showError("Failed to update profile.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSendTest = async () => {
+    if (!isConnected || !whatsappNumber) {
+      showError("Please connect Google and set your WhatsApp number first.");
+      return;
+    }
+
+    setTesting(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('calendar-bot', {
+        body: { action: 'test', userId: user?.id }
+      });
+
+      if (error) throw error;
+      showSuccess("Test message sent! Check your WhatsApp.");
+    } catch (error) {
+      console.error("Test error:", error);
+      showError("Failed to send test message. Check your WhatsApp API secrets in Supabase.");
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -209,26 +227,48 @@ const Dashboard = () => {
               </Card>
             </div>
 
-            <Card className="border-none shadow-sm">
-              <CardHeader>
-                <CardTitle>Schedule Preview</CardTitle>
-                <CardDescription>This is how your daily message will look on WhatsApp.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="bg-slate-900 text-slate-100 p-6 rounded-2xl font-mono text-sm max-w-md shadow-lg">
-                  <div className="flex items-center gap-2 mb-4 border-b border-slate-800 pb-2">
-                    <div className="w-2 h-2 rounded-full bg-green-500" />
-                    <p className="text-slate-400 text-xs uppercase tracking-wider">WhatsApp • 07:00 AM</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Card className="border-none shadow-sm">
+                <CardHeader>
+                  <CardTitle>Schedule Preview</CardTitle>
+                  <CardDescription>This is how your daily message will look on WhatsApp.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="bg-slate-900 text-slate-100 p-6 rounded-2xl font-mono text-sm shadow-lg">
+                    <div className="flex items-center gap-2 mb-4 border-b border-slate-800 pb-2">
+                      <div className="w-2 h-2 rounded-full bg-green-500" />
+                      <p className="text-slate-400 text-xs uppercase tracking-wider">WhatsApp • 07:00 AM</p>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-blue-400">📅 Today's Schedule:</p>
+                      <p>07:00-08:00 workout</p>
+                      <p>09:30-11:00 meeting about X at work</p>
+                      <p>18:00-21:00 date night with fiance</p>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <p className="text-blue-400">📅 Today's Schedule:</p>
-                    <p>07:00-08:00 workout</p>
-                    <p>09:30-11:00 meeting about X at work</p>
-                    <p>18:00-21:00 date night with fiance</p>
-                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-none shadow-sm flex flex-col justify-center items-center p-8 text-center space-y-4">
+                <div className="p-4 bg-blue-50 rounded-full">
+                  <Send className="w-8 h-8 text-blue-600" />
                 </div>
-              </CardContent>
-            </Card>
+                <div>
+                  <CardTitle>Test Integration</CardTitle>
+                  <CardDescription className="mt-2">
+                    Send a real message to your WhatsApp right now to verify everything is working.
+                  </CardDescription>
+                </div>
+                <Button 
+                  onClick={handleSendTest} 
+                  disabled={testing || !isConnected || !whatsappNumber}
+                  className="w-full max-w-xs rounded-xl h-12"
+                >
+                  {testing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />}
+                  {testing ? "Sending..." : "Send Test Message"}
+                </Button>
+              </Card>
+            </div>
           </TabsContent>
 
           <TabsContent value="settings" className="space-y-6">
