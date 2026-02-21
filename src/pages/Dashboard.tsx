@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Calendar, MessageSquare, Settings, Bell, CheckCircle2, AlertCircle, LogOut } from 'lucide-react';
+import { Calendar, MessageSquare, Bell, LogOut, ExternalLink } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,10 +12,11 @@ import { useAuth } from '@/components/AuthProvider';
 import { showSuccess, showError } from '@/utils/toast';
 
 const Dashboard = () => {
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const [isConnected, setIsConnected] = useState(false);
   const [whatsappNumber, setWhatsappNumber] = useState("");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -31,7 +32,8 @@ const Dashboard = () => {
         .eq('id', user?.id)
         .single();
 
-      if (error) throw error;
+      if (error && error.code !== 'PGRST116') throw error;
+      
       if (data) {
         setWhatsappNumber(data.whatsapp_number || "");
         setIsConnected(!!data.google_access_token);
@@ -43,17 +45,69 @@ const Dashboard = () => {
     }
   };
 
+  const handleConnectGoogle = async () => {
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          scopes: 'https://www.googleapis.com/auth/calendar.readonly',
+          redirectTo: window.location.origin + '/dashboard',
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          }
+        }
+      });
+      if (error) throw error;
+    } catch (error) {
+      showError("Failed to connect Google Calendar.");
+    }
+  };
+
+  // Check if we just returned from OAuth and have a provider token
+  useEffect(() => {
+    const updateTokens = async () => {
+      if (session?.provider_token && user) {
+        const { error } = await supabase
+          .from('profiles')
+          .upsert({ 
+            id: user.id, 
+            google_access_token: session.provider_token,
+            google_refresh_token: session.provider_refresh_token,
+            updated_at: new Date().toISOString()
+          });
+        
+        if (!error) {
+          setIsConnected(true);
+          showSuccess("Google Calendar connected!");
+        }
+      }
+    };
+    updateTokens();
+  }, [session, user]);
+
   const saveWhatsappNumber = async () => {
+    if (!whatsappNumber) {
+      showError("Please enter a valid WhatsApp number.");
+      return;
+    }
+    
+    setSaving(true);
     try {
       const { error } = await supabase
         .from('profiles')
-        .update({ whatsapp_number: whatsappNumber })
-        .eq('id', user?.id);
+        .upsert({ 
+          id: user?.id, 
+          whatsapp_number: whatsappNumber,
+          updated_at: new Date().toISOString()
+        });
 
       if (error) throw error;
       showSuccess("WhatsApp number updated successfully!");
     } catch (error) {
       showError("Failed to update WhatsApp number.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -72,8 +126,8 @@ const Dashboard = () => {
             <p className="text-slate-500">Welcome back, {user?.email}</p>
           </div>
           <div className="flex items-center gap-4">
-            <Badge variant={isConnected ? "default" : "secondary"} className="px-3 py-1">
-              {isConnected ? "Bot Active" : "Bot Paused"}
+            <Badge variant={isConnected && whatsappNumber ? "default" : "secondary"} className="px-3 py-1">
+              {isConnected && whatsappNumber ? "Bot Active" : "Setup Incomplete"}
             </Badge>
             <Button variant="ghost" size="sm" onClick={handleLogout} className="text-slate-500">
               <LogOut className="w-4 h-4 mr-2" /> Sign Out
@@ -85,7 +139,6 @@ const Dashboard = () => {
           <TabsList className="bg-white border">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
-            <TabsTrigger value="logs">Activity Logs</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-6">
@@ -102,7 +155,7 @@ const Dashboard = () => {
                       </div>
                       <span className="font-semibold">{isConnected ? "Connected" : "Not Linked"}</span>
                     </div>
-                    <Button variant="outline" size="sm">
+                    <Button variant={isConnected ? "outline" : "default"} size="sm" onClick={handleConnectGoogle}>
                       {isConnected ? "Reconnect" : "Connect"}
                     </Button>
                   </div>
@@ -167,28 +220,11 @@ const Dashboard = () => {
           <TabsContent value="settings" className="space-y-6">
             <Card className="border-none shadow-sm">
               <CardHeader>
-                <CardTitle>Notification Preferences</CardTitle>
-                <CardDescription>Configure when and how you receive updates.</CardDescription>
+                <CardTitle>Configuration</CardTitle>
+                <CardDescription>Link your accounts to start receiving updates.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                <div className="grid gap-4">
-                  <div className="flex items-center justify-between p-4 border rounded-lg">
-                    <div className="space-y-0.5">
-                      <Label className="text-base">Daily Schedule</Label>
-                      <p className="text-sm text-slate-500">Send a message every morning at 07:00.</p>
-                    </div>
-                    <Switch defaultChecked />
-                  </div>
-                  <div className="flex items-center justify-between p-4 border rounded-lg">
-                    <div className="space-y-0.5">
-                      <Label className="text-base">Weekly Overview</Label>
-                      <p className="text-sm text-slate-500">Send a message every Saturday at 21:00.</p>
-                    </div>
-                    <Switch defaultChecked />
-                  </div>
-                </div>
-
-                <div className="space-y-4 pt-4">
+                <div className="space-y-4">
                   <div className="grid gap-2">
                     <Label htmlFor="whatsapp">WhatsApp Phone Number</Label>
                     <div className="flex gap-2">
@@ -199,24 +235,21 @@ const Dashboard = () => {
                         onChange={(e) => setWhatsappNumber(e.target.value)}
                         className="max-w-sm"
                       />
-                      <Button onClick={saveWhatsappNumber}>Save Number</Button>
+                      <Button onClick={saveWhatsappNumber} disabled={saving}>
+                        {saving ? "Saving..." : "Save Number"}
+                      </Button>
                     </div>
                     <p className="text-xs text-slate-500">Include country code (e.g., +1 for USA).</p>
                   </div>
                 </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
 
-          <TabsContent value="logs">
-            <Card className="border-none shadow-sm">
-              <CardHeader>
-                <CardTitle>Recent Activity</CardTitle>
-                <CardDescription>History of messages sent and received.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <p className="text-sm text-slate-500 italic">Activity logs will appear here once the bot starts sending messages.</p>
+                <div className="pt-4 border-t">
+                  <Label className="text-base block mb-2">Google Calendar Access</Label>
+                  <p className="text-sm text-slate-500 mb-4">We need read-only access to your primary calendar to send you schedule updates.</p>
+                  <Button variant={isConnected ? "outline" : "default"} onClick={handleConnectGoogle}>
+                    {isConnected ? "Reconnect Google Account" : "Connect Google Calendar"}
+                    <ExternalLink className="ml-2 w-4 h-4" />
+                  </Button>
                 </div>
               </CardContent>
             </Card>
