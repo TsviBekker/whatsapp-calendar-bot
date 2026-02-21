@@ -26,8 +26,13 @@ serve(async (req) => {
       .eq('id', userId)
       .single();
 
-    if (profileError || !profile?.whatsapp_number) {
-      return new Response(JSON.stringify({ error: "Profile or number missing" }), { status: 400, headers: corsHeaders });
+    if (profileError || !profile) {
+      console.error("[calendar-bot] Profile not found", profileError);
+      return new Response(JSON.stringify({ error: "User profile not found" }), { status: 404, headers: corsHeaders });
+    }
+
+    if (!profile.whatsapp_number) {
+      return new Response(JSON.stringify({ error: "WhatsApp number not set" }), { status: 400, headers: corsHeaders });
     }
 
     const cleanNumber = profile.whatsapp_number.replace(/\D/g, '');
@@ -39,10 +44,19 @@ serve(async (req) => {
       messageText = "🚀 Test successful! Your WhatsApp integration is working.";
     } else if (action === 'daily' || action === 'weekly') {
       if (!profile.google_access_token) {
-        messageText = "❌ Please connect your Google Calendar in the dashboard first.";
-      } else {
+        return new Response(JSON.stringify({ error: "Google Calendar not connected. Please go to settings and click 'Connect'." }), { status: 400, headers: corsHeaders });
+      }
+      
+      try {
         const events = await fetchCalendarEvents(profile.google_access_token, action);
         messageText = formatEventsMessage(events, action);
+      } catch (err) {
+        console.error("[calendar-bot] Calendar Fetch Error:", err.message);
+        // If it's a 401, the token is expired
+        if (err.message.includes("401")) {
+          return new Response(JSON.stringify({ error: "Google session expired. Please click 'Reconnect' in your dashboard." }), { status: 401, headers: corsHeaders });
+        }
+        throw err;
       }
     }
 
@@ -50,7 +64,7 @@ serve(async (req) => {
     return new Response(JSON.stringify(result), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    console.error("[calendar-bot] Error:", error);
+    console.error("[calendar-bot] Global Error:", error);
     return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: corsHeaders });
   }
 })
@@ -74,9 +88,9 @@ async function fetchCalendarEvents(token: string, type: 'daily' | 'weekly') {
   });
 
   if (!res.ok) {
-    const err = await res.json();
-    console.error("[calendar-bot] Google API Error", err);
-    throw new Error("Failed to fetch calendar events");
+    const errorData = await res.json();
+    console.error("[calendar-bot] Google API Error Details:", JSON.stringify(errorData));
+    throw new Error(`Google API Error: ${res.status} - ${errorData.error?.message || 'Unknown error'}`);
   }
 
   const data = await res.json();
