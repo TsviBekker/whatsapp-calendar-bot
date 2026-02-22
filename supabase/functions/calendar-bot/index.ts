@@ -52,7 +52,6 @@ serve(async (req) => {
         messageText = formatEventsMessage(events, action);
       } catch (err) {
         console.error("[calendar-bot] Calendar Fetch Error:", err.message);
-        // If it's a 401, the token is expired
         if (err.message.includes("401")) {
           return new Response(JSON.stringify({ error: "Google session expired. Please click 'Reconnect' in your dashboard." }), { status: 401, headers: corsHeaders });
         }
@@ -72,11 +71,13 @@ serve(async (req) => {
 async function fetchCalendarEvents(token: string, type: 'daily' | 'weekly') {
   const now = new Date();
   const timeMin = now.toISOString();
-  const end = new Date();
+  const end = new Date(now.getTime());
   
   if (type === 'daily') {
-    end.setHours(23, 59, 59, 999);
+    // Set to exactly 24 hours from now
+    end.setHours(now.getHours() + 24);
   } else {
+    // Set to exactly 7 days from now
     end.setDate(now.getDate() + 7);
   }
   const timeMax = end.toISOString();
@@ -100,11 +101,11 @@ async function fetchCalendarEvents(token: string, type: 'daily' | 'weekly') {
 function formatEventsMessage(events: any[], type: 'daily' | 'weekly') {
   if (events.length === 0) {
     return type === 'daily' 
-      ? "📅 You have a clear schedule for today! Enjoy your day. ✨" 
+      ? "📅 You have a clear schedule for the next 24 hours! Enjoy your day. ✨" 
       : "📅 No events found for the upcoming week.";
   }
 
-  let msg = type === 'daily' ? "📅 *Today's Schedule:*\n\n" : "📅 *Weekly Overview:*\n\n";
+  let msg = type === 'daily' ? "📅 *Schedule (Next 24h):*\n\n" : "📅 *Weekly Overview (Next 7d):*\n\n";
   
   events.forEach((event: any) => {
     const start = new Date(event.start.dateTime || event.start.date);
@@ -112,7 +113,9 @@ function formatEventsMessage(events: any[], type: 'daily' | 'weekly') {
       ? start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
       : "All Day";
     
-    const dateStr = type === 'weekly' ? `${start.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} | ` : "";
+    // For daily, we still show the date if it's tomorrow
+    const isTomorrow = start.getDate() !== new Date().getDate();
+    const dateStr = (type === 'weekly' || isTomorrow) ? `${start.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} | ` : "";
     msg += `• ${dateStr}${timeStr}: ${event.summary}\n`;
   });
 
