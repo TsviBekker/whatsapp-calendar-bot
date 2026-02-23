@@ -87,7 +87,7 @@ serve(async (req) => {
       } else {
         try {
           const items = await fetchAllItems(profile.google_access_token, action);
-          messageText = formatUnifiedMessage(items, action, profile.timezone || 'UTC');
+          messageText = formatUnifiedMessage(items, action, profile.timezone || 'Asia/Jerusalem');
         } catch (err) {
           console.error("[calendar-bot] Fetch Error:", err.message);
           messageText = "❌ Your Google session has expired. Please open the dashboard to refresh your connection.";

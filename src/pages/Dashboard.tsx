@@ -12,6 +12,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { showSuccess, showError } from '@/utils/toast';
 
 const TIMEZONES = [
+  { label: "Israel (IST/IDT)", value: "Asia/Jerusalem" },
   { label: "UTC (Universal)", value: "UTC" },
   { label: "London (GMT/BST)", value: "Europe/London" },
   { label: "Paris/Berlin (CET/CEST)", value: "Europe/Paris" },
@@ -25,7 +26,7 @@ const Dashboard = () => {
   const { user, session } = useAuth();
   const [isConnected, setIsConnected] = useState(false);
   const [whatsappNumber, setWhatsappNumber] = useState("");
-  const [timezone, setTimezone] = useState("UTC");
+  const [timezone, setTimezone] = useState("Asia/Jerusalem");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -61,7 +62,7 @@ const Dashboard = () => {
       if (error && error.code !== 'PGRST116') throw error;
       if (data) {
         setWhatsappNumber(data.whatsapp_number || "");
-        setTimezone(data.timezone || "UTC");
+        setTimezone(data.timezone || "Asia/Jerusalem");
         setIsConnected(!!data.google_access_token);
       }
     } catch (error) {
