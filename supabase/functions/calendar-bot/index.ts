@@ -35,6 +35,7 @@ serve(async (req) => {
       .single();
 
     if (profileError || !profile) {
+      console.error("[calendar-bot] Profile error:", profileError);
       return new Response(JSON.stringify({ error: "User profile not found" }), { status: 404, headers: corsHeaders });
     }
 
@@ -56,6 +57,7 @@ serve(async (req) => {
       
       try {
         const items = await fetchAllItems(profile.google_access_token, action);
+        console.log(`[calendar-bot] Total items found: ${items.length}`);
         messageText = formatUnifiedMessage(items, action);
       } catch (err) {
         console.error("[calendar-bot] Fetch Error:", err.message);
@@ -67,6 +69,7 @@ serve(async (req) => {
     }
 
     const result = await sendWhatsAppMessage(cleanNumber, messageText);
+    console.log("[calendar-bot] WhatsApp result:", JSON.stringify(result));
     return new Response(JSON.stringify(result), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
@@ -77,75 +80,131 @@ serve(async (req) => {
 
 async function fetchAllItems(token: string, type: 'daily' | 'weekly'): Promise<UnifiedItem[]> {
   const now = new Date();
-  const timeMin = now.toISOString();
-  const end = new Date(now.getTime());
-  if (type === 'daily') end.setHours(now.getHours() + 24);
-  else end.setDate(now.getDate() + 7);
+  // Set timeMin to the start of the current day in UTC to be safe
+  const timeMinDate = new Date(now);
+  timeMinDate.setHours(0, 0, 0, 0);
+  const timeMin = timeMinDate.toISOString();
+  
+  const end = new Date(timeMinDate);
+  if (type === 'daily') end.setDate(end.getDate() + 2); // Fetch 48h to be safe with timezones
+  else end.setDate(end.getDate() + 8);
   const timeMax = end.toISOString();
+
+  console.log(`[calendar-bot] Fetching from ${timeMin} to ${timeMax}`);
 
   const [events, tasks] = await Promise.all([
     fetchEventsFromAllCalendars(token, timeMin, timeMax),
     fetchTasksFromAllLists(token, timeMin, timeMax)
   ]);
 
-  return [...events, ...tasks].sort((a, b) => a.start.getTime() - b.start.getTime());
+  const allItems = [...events, ...tasks].sort((a, b) => a.start.getTime() - b.start.getTime());
+  
+  // Filter to only include items within the requested window relative to "now"
+  const limit = new Date(now);
+  if (type === 'daily') limit.setHours(limit.getHours() + 24);
+  else limit.setDate(limit.getDate() + 7);
+
+  return allItems.filter(item => item.start >= timeMinDate && item.start <= limit);
 }
 
 async function fetchEventsFromAllCalendars(token: string, timeMin: string, timeMax: string): Promise<UnifiedItem[]> {
   const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
     headers: { 'Authorization': `Bearer ${token}` }
   });
-  if (!listRes.ok) return [];
+  
+  if (!listRes.ok) {
+    console.error("[calendar-bot] Failed to fetch calendar list:", await listRes.text());
+    return [];
+  }
+  
   const listData = await listRes.json();
   const calendars = listData.items || [];
+  console.log(`[calendar-bot] Found ${calendars.length} calendars`);
 
   const allEvents: UnifiedItem[] = [];
   await Promise.all(calendars.map(async (cal: any) => {
-    const eventsRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    if (!eventsRes.ok) return;
-    const data = await eventsRes.json();
-    (data.items || []).forEach((event: any) => {
-      allEvents.push({
-        title: event.summary,
-        start: new Date(event.start.dateTime || event.start.date),
-        end: event.end ? new Date(event.end.dateTime || event.end.date) : undefined,
-        type: 'event',
-        allDay: !event.start.dateTime
+    try {
+      const eventsRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`, {
+        headers: { 'Authorization': `Bearer ${token}` }
       });
-    });
+      
+      if (!eventsRes.ok) {
+        console.warn(`[calendar-bot] Failed to fetch events for ${cal.id}:`, await eventsRes.text());
+        return;
+      }
+      
+      const data = await eventsRes.json();
+      const items = data.items || [];
+      console.log(`[calendar-bot] Calendar ${cal.summary}: ${items.length} events`);
+      
+      items.forEach((event: any) => {
+        allEvents.push({
+          title: event.summary || "(No Title)",
+          start: new Date(event.start.dateTime || event.start.date),
+          end: event.end ? new Date(event.end.dateTime || event.end.date) : undefined,
+          type: 'event',
+          allDay: !event.start.dateTime
+        });
+      });
+    } catch (e) {
+      console.error(`[calendar-bot] Error fetching calendar ${cal.id}:`, e);
+    }
   }));
+  
   return allEvents;
 }
 
 async function fetchTasksFromAllLists(token: string, timeMin: string, timeMax: string): Promise<UnifiedItem[]> {
-  const listRes = await fetch('https://www.googleapis.com/tasks/v1/users/@me/lists', {
-    headers: { 'Authorization': `Bearer ${token}` }
-  });
-  if (!listRes.ok) return [];
-  const listData = await listRes.json();
-  const taskLists = listData.items || [];
-
-  const allTasks: UnifiedItem[] = [];
-  await Promise.all(taskLists.map(async (list: any) => {
-    const tasksRes = await fetch(`https://www.googleapis.com/tasks/v1/lists/${list.id}/tasks?dueMin=${timeMin}&dueMax=${timeMax}&showCompleted=false`, {
+  try {
+    const listRes = await fetch('https://www.googleapis.com/tasks/v1/users/@me/lists', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
-    if (!tasksRes.ok) return;
-    const data = await tasksRes.json();
-    (data.items || []).forEach((task: any) => {
-      if (task.due) {
-        allTasks.push({
-          title: task.title,
-          start: new Date(task.due),
-          type: 'task',
-          allDay: true
+    
+    if (!listRes.ok) {
+      console.error("[calendar-bot] Failed to fetch task lists:", await listRes.text());
+      return [];
+    }
+    
+    const listData = await listRes.json();
+    const taskLists = listData.items || [];
+    console.log(`[calendar-bot] Found ${taskLists.length} task lists`);
+
+    const allTasks: UnifiedItem[] = [];
+    await Promise.all(taskLists.map(async (list: any) => {
+      try {
+        const tasksRes = await fetch(`https://www.googleapis.com/tasks/v1/lists/${list.id}/tasks?dueMin=${timeMin}&dueMax=${timeMax}&showCompleted=false`, {
+          headers: { 'Authorization': `Bearer ${token}` }
         });
+        
+        if (!tasksRes.ok) {
+          console.warn(`[calendar-bot] Failed to fetch tasks for ${list.id}:`, await tasksRes.text());
+          return;
+        }
+        
+        const data = await tasksRes.json();
+        const items = data.items || [];
+        console.log(`[calendar-bot] Task List ${list.title}: ${items.length} tasks`);
+        
+        items.forEach((task: any) => {
+          if (task.due) {
+            allTasks.push({
+              title: task.title || "(No Title)",
+              start: new Date(task.due),
+              type: 'task',
+              allDay: true
+            });
+          }
+        });
+      } catch (e) {
+        console.error(`[calendar-bot] Error fetching task list ${list.id}:`, e);
       }
-    });
-  }));
-  return allTasks;
+    }));
+    
+    return allTasks;
+  } catch (e) {
+    console.error("[calendar-bot] Global tasks fetch error:", e);
+    return [];
+  }
 }
 
 function formatUnifiedMessage(items: UnifiedItem[], type: 'daily' | 'weekly') {
@@ -157,6 +216,9 @@ function formatUnifiedMessage(items: UnifiedItem[], type: 'daily' | 'weekly') {
 
   let msg = type === 'daily' ? "📅 *Schedule (Next 24h):*\n\n" : "📅 *Weekly Overview (Next 7d):*\n\n";
   
+  const now = new Date();
+  const todayStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' }).replace(/\//g, '.');
+
   items.forEach((item) => {
     const start = item.start;
     const end = item.end;
@@ -173,8 +235,8 @@ function formatUnifiedMessage(items: UnifiedItem[], type: 'daily' | 'weekly') {
     const weekday = start.toLocaleDateString('en-US', { weekday: 'long' });
     const dayMonth = start.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' }).replace(/\//g, '.');
     
-    const isTomorrow = start.getDate() !== new Date().getDate();
-    const dateStr = (type === 'weekly' || isTomorrow) ? `${weekday} ${dayMonth} | ` : "";
+    const isToday = dayMonth === todayStr;
+    const dateStr = (type === 'weekly' || !isToday) ? `${weekday} ${dayMonth} | ` : "";
     const icon = item.type === 'task' ? "✅" : "•";
     
     msg += `${icon} ${dateStr}${timeStr}: ${item.title}\n`;
