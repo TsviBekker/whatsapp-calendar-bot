@@ -1,19 +1,31 @@
 import React, { useEffect, useState } from 'react';
-import { Calendar, MessageSquare, Bell, LogOut, ExternalLink, Loader2, Send, Users, Clock, CalendarDays } from 'lucide-react';
+import { Calendar, MessageSquare, Bell, LogOut, ExternalLink, Loader2, Send, Users, Clock, CalendarDays, Globe } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/components/AuthProvider';
 import { showSuccess, showError } from '@/utils/toast';
+
+const TIMEZONES = [
+  { label: "UTC (Universal)", value: "UTC" },
+  { label: "London (GMT/BST)", value: "Europe/London" },
+  { label: "Paris/Berlin (CET/CEST)", value: "Europe/Paris" },
+  { label: "New York (EST/EDT)", value: "America/New_York" },
+  { label: "Los Angeles (PST/PDT)", value: "America/Los_Angeles" },
+  { label: "Tokyo (JST)", value: "Asia/Tokyo" },
+  { label: "Sydney (AEST/AEDT)", value: "Australia/Sydney" },
+];
 
 const Dashboard = () => {
   const { user, session } = useAuth();
   const [isConnected, setIsConnected] = useState(false);
   const [whatsappNumber, setWhatsappNumber] = useState("");
+  const [timezone, setTimezone] = useState("UTC");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -49,6 +61,7 @@ const Dashboard = () => {
       if (error && error.code !== 'PGRST116') throw error;
       if (data) {
         setWhatsappNumber(data.whatsapp_number || "");
+        setTimezone(data.timezone || "UTC");
         setIsConnected(!!data.google_access_token);
       }
     } catch (error) {
@@ -63,13 +76,9 @@ const Dashboard = () => {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          // Requesting both Calendar and Tasks scopes
           scopes: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks.readonly',
           redirectTo: window.location.origin + '/dashboard',
-          queryParams: { 
-            access_type: 'offline', 
-            prompt: 'consent' // Force consent to ensure user can select new scopes
-          }
+          queryParams: { access_type: 'offline', prompt: 'consent' }
         }
       });
       if (error) throw error;
@@ -78,7 +87,7 @@ const Dashboard = () => {
     }
   };
 
-  const saveWhatsappNumber = async () => {
+  const saveSettings = async () => {
     if (!whatsappNumber || whatsappNumber.length < 8) {
       showError("Please enter a valid number with country code.");
       return;
@@ -88,10 +97,11 @@ const Dashboard = () => {
       const { error } = await supabase.from('profiles').upsert({ 
         id: user?.id, 
         whatsapp_number: whatsappNumber,
+        timezone: timezone,
         updated_at: new Date().toISOString()
       });
       if (error) throw error;
-      showSuccess("Destination updated!");
+      showSuccess("Settings updated!");
       await supabase.functions.invoke('calendar-bot', { body: { action: 'welcome', userId: user?.id } });
     } catch (error) {
       showError("Failed to update profile.");
@@ -109,12 +119,8 @@ const Dashboard = () => {
     try {
       const { data, error } = await supabase.functions.invoke('calendar-bot', { body: { action, userId: user?.id } });
       if (error) throw error;
-      
-      if (data?.error) {
-        showError(data.error);
-      } else {
-        showSuccess(`${action.charAt(0).toUpperCase() + action.slice(1)} schedule sent!`);
-      }
+      if (data?.error) showError(data.error);
+      else showSuccess(`${action.charAt(0).toUpperCase() + action.slice(1)} schedule sent!`);
     } catch (error) {
       showError(`Failed to send ${action} schedule.`);
     } finally {
@@ -195,15 +201,15 @@ const Dashboard = () => {
 
               <Card className="border-none shadow-sm">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-xs font-bold text-slate-400 uppercase tracking-widest">Next Update</CardTitle>
+                  <CardTitle className="text-xs font-bold text-slate-400 uppercase tracking-widest">Timezone</CardTitle>
                 </CardHeader>
                 <CardContent className="flex items-center gap-3">
                   <div className="p-2 bg-purple-100 rounded-lg">
-                    <Bell className="w-5 h-5 text-purple-600" />
+                    <Globe className="w-5 h-5 text-purple-600" />
                   </div>
                   <div>
-                    <p className="font-semibold text-slate-900">Tomorrow, 07:00</p>
-                    <p className="text-xs text-slate-500">Daily Schedule</p>
+                    <p className="font-semibold text-slate-900">{TIMEZONES.find(t => t.value === timezone)?.label || timezone}</p>
+                    <p className="text-xs text-slate-500">Local Time Format</p>
                   </div>
                 </CardContent>
               </Card>
@@ -260,27 +266,43 @@ const Dashboard = () => {
             <Card className="border-none shadow-sm">
               <CardHeader>
                 <CardTitle>Configuration</CardTitle>
-                <CardDescription>Set where you want to receive your schedules.</CardDescription>
+                <CardDescription>Set where and how you want to receive your schedules.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-8">
-                <div className="space-y-4">
-                  <div className="grid gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-4">
                     <Label htmlFor="whatsapp" className="text-slate-700 font-semibold">Destination WhatsApp Number</Label>
-                    <div className="flex flex-col sm:flex-row gap-3">
-                      <Input 
-                        id="whatsapp" 
-                        placeholder="+1234567890" 
-                        value={whatsappNumber}
-                        onChange={(e) => setWhatsappNumber(e.target.value)}
-                        className="max-w-sm rounded-xl h-11"
-                      />
-                      <Button onClick={saveWhatsappNumber} disabled={saving} className="rounded-xl h-11 px-6">
-                        {saving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                        {saving ? "Saving..." : "Save Destination"}
-                      </Button>
-                    </div>
-                    <p className="text-xs text-slate-500">Enter your phone number with country code. You can then forward these messages to your group.</p>
+                    <Input 
+                      id="whatsapp" 
+                      placeholder="+1234567890" 
+                      value={whatsappNumber}
+                      onChange={(e) => setWhatsappNumber(e.target.value)}
+                      className="rounded-xl h-11"
+                    />
+                    <p className="text-xs text-slate-500">Enter your phone number with country code.</p>
                   </div>
+
+                  <div className="space-y-4">
+                    <Label htmlFor="timezone" className="text-slate-700 font-semibold">Your Timezone</Label>
+                    <Select value={timezone} onValueChange={setTimezone}>
+                      <SelectTrigger id="timezone" className="rounded-xl h-11">
+                        <SelectValue placeholder="Select timezone" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TIMEZONES.map((tz) => (
+                          <SelectItem key={tz.value} value={tz.value}>{tz.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-slate-500">This ensures the bot shows times correctly for your location.</p>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-4">
+                  <Button onClick={saveSettings} disabled={saving} className="rounded-xl h-11 px-8">
+                    {saving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                    {saving ? "Saving..." : "Save All Settings"}
+                  </Button>
                 </div>
 
                 <div className="pt-6 border-t">

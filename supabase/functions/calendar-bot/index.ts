@@ -87,7 +87,7 @@ serve(async (req) => {
       } else {
         try {
           const items = await fetchAllItems(profile.google_access_token, action);
-          messageText = formatUnifiedMessage(items, action);
+          messageText = formatUnifiedMessage(items, action, profile.timezone || 'UTC');
         } catch (err) {
           console.error("[calendar-bot] Fetch Error:", err.message);
           messageText = "❌ Your Google session has expired. Please open the dashboard to refresh your connection.";
@@ -190,14 +190,49 @@ async function fetchTasksFromAllLists(token: string): Promise<UnifiedItem[]> {
   return allTasks;
 }
 
-function formatUnifiedMessage(items: UnifiedItem[], type: 'daily' | 'weekly') {
+function formatUnifiedMessage(items: UnifiedItem[], type: 'daily' | 'weekly', timezone: string) {
   if (items.length === 0) return "📅 No events found for this period.";
+  
   let msg = type === 'daily' ? "📅 *Today's Schedule:*\n\n" : "📅 *Weekly Overview:*\n\n";
+  let lastDay = "";
+
   items.forEach((item) => {
-    const timeStr = item.allDay ? "All Day" : item.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-    const dateStr = type === 'weekly' ? `${item.start.toLocaleDateString('en-US', { weekday: 'short' })} | ` : "";
-    msg += `${item.type === 'task' ? '✅' : '•'} ${dateStr}${timeStr}: ${item.title}\n`;
+    const startStr = item.start.toLocaleTimeString('en-GB', { 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      hour12: false,
+      timeZone: timezone 
+    });
+    
+    const endStr = item.end ? item.end.toLocaleTimeString('en-GB', { 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      hour12: false,
+      timeZone: timezone 
+    }) : "";
+
+    const currentDay = item.start.toLocaleDateString('en-GB', { 
+      weekday: 'long', 
+      day: '2-digit', 
+      month: 'short',
+      timeZone: timezone 
+    });
+
+    // Add separator for weekly view when day changes
+    if (type === 'weekly' && lastDay !== "" && lastDay !== currentDay) {
+      msg += "------------------\n";
+    }
+    lastDay = currentDay;
+
+    const timeDisplay = item.allDay ? "All Day" : `${startStr}${endStr ? ' - ' + endStr : ''}`;
+    const datePrefix = type === 'weekly' ? `*${currentDay}*\n` : "";
+    
+    // Only show the day header once in weekly view
+    const showHeader = type === 'weekly' && msg.indexOf(`*${currentDay}*`) === -1;
+    
+    msg += `${showHeader ? datePrefix : ""}${item.type === 'task' ? '✅' : '•'} ${timeDisplay}: ${item.title}\n`;
   });
+  
   return msg;
 }
 
