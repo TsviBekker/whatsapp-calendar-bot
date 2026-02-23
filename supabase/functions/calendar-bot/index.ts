@@ -9,9 +9,9 @@ const corsHeaders = {
 interface UnifiedItem {
   title: string;
   start: Date;
+  end?: Date;
   type: 'event' | 'task';
   allDay: boolean;
-  calendarName?: string;
 }
 
 serve(async (req) => {
@@ -110,9 +110,9 @@ async function fetchEventsFromAllCalendars(token: string, timeMin: string, timeM
       allEvents.push({
         title: event.summary,
         start: new Date(event.start.dateTime || event.start.date),
+        end: event.end ? new Date(event.end.dateTime || event.end.date) : undefined,
         type: 'event',
-        allDay: !event.start.dateTime,
-        calendarName: cal.summary
+        allDay: !event.start.dateTime
       });
     });
   }));
@@ -158,16 +158,26 @@ function formatUnifiedMessage(items: UnifiedItem[], type: 'daily' | 'weekly') {
   let msg = type === 'daily' ? "📅 *Schedule (Next 24h):*\n\n" : "📅 *Weekly Overview (Next 7d):*\n\n";
   
   items.forEach((item) => {
-    const timeStr = item.allDay 
-      ? "All Day"
-      : item.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const start = item.start;
+    const end = item.end;
     
-    const isTomorrow = item.start.getDate() !== new Date().getDate();
-    const dateStr = (type === 'weekly' || isTomorrow) ? `${item.start.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} | ` : "";
+    let timeStr = "";
+    if (item.allDay) {
+      timeStr = "All Day";
+    } else {
+      const startStr = start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const endStr = end ? end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : "";
+      timeStr = endStr ? `${startStr} - ${endStr}` : startStr;
+    }
+    
+    const weekday = start.toLocaleDateString('en-US', { weekday: 'long' });
+    const dayMonth = start.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' }).replace(/\//g, '.');
+    
+    const isTomorrow = start.getDate() !== new Date().getDate();
+    const dateStr = (type === 'weekly' || isTomorrow) ? `${weekday} ${dayMonth} | ` : "";
     const icon = item.type === 'task' ? "✅" : "•";
-    const calInfo = item.calendarName && item.calendarName !== 'Primary' ? ` [${item.calendarName}]` : "";
     
-    msg += `${icon} ${dateStr}${timeStr}: ${item.title}${calInfo}\n`;
+    msg += `${icon} ${dateStr}${timeStr}: ${item.title}\n`;
   });
 
   return msg;
