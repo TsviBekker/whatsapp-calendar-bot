@@ -15,18 +15,77 @@ interface UnifiedItem {
 }
 
 serve(async (req) => {
+  // Handle CORS
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
 
-  try {
-    const { action, userId } = await req.json();
-    console.log(`[calendar-bot] Action: ${action}, User: ${userId}`);
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  );
 
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+  // 1. Handle WhatsApp Webhook Verification (GET)
+  if (req.method === 'GET') {
+    const url = new URL(req.url);
+    const mode = url.searchParams.get('hub.mode');
+    const token = url.searchParams.get('hub.verify_token');
+    const challenge = url.searchParams.get('hub.challenge');
+
+    if (mode === 'subscribe' && token === 'calendar_bot_secret') {
+      console.log("[calendar-bot] Webhook verified");
+      return new Response(challenge, { status: 200 });
+    }
+    return new Response('Forbidden', { status: 403 });
+  }
+
+  try {
+    const body = await req.json();
+    console.log("[calendar-bot] Received request body:", JSON.stringify(body, null, 2));
+
+    let action = "";
+    let userId = "";
+    let targetNumber = "";
+
+    // 2. Handle Incoming WhatsApp Message (Webhook POST)
+    if (body.object === 'whatsapp_business_account') {
+      const entry = body.entry?.[0];
+      const changes = entry?.changes?.[0];
+      const value = changes?.value;
+      const message = value?.messages?.[0];
+
+      if (!message) return new Response('No message', { status: 200 });
+
+      const from = message.from; // User's phone number
+      const text = message.text?.body?.toLowerCase().trim();
+
+      if (text === 'daily' || text === 'weekly') {
+        action = text;
+        // Find user by phone number
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('id')
+          .ilike('whatsapp_number', `%${from}%`)
+          .single();
+        
+        if (!profile) {
+          await sendWhatsAppMessage(from, "❌ I couldn't find a profile linked to this number. Please set your number in the dashboard.");
+          return new Response('User not found', { status: 200 });
+        }
+        userId = profile.id;
+        targetNumber = from;
+      } else {
+        await sendWhatsAppMessage(from, "🤖 Hi! Send 'daily' to see today's schedule or 'weekly' for the next 7 days.");
+        return new Response('Unknown command', { status: 200 });
+      }
+    } 
+    // 3. Handle Manual Trigger from Dashboard (Direct POST)
+    else {
+      action = body.action;
+      userId = body.userId;
+    }
+
+    if (!userId) return new Response('Missing User ID', { status: 400 });
 
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
@@ -35,15 +94,14 @@ serve(async (req) => {
       .single();
 
     if (profileError || !profile) {
-      console.error("[calendar-bot] Profile error:", profileError);
       return new Response(JSON.stringify({ error: "User profile not found" }), { status: 404, headers: corsHeaders });
     }
 
-    if (!profile.whatsapp_number) {
+    targetNumber = targetNumber || profile.whatsapp_number?.replace(/\D/g, '');
+    if (!targetNumber) {
       return new Response(JSON.stringify({ error: "WhatsApp number not set" }), { status: 400, headers: corsHeaders });
     }
 
-    const cleanNumber = profile.whatsapp_number.replace(/\D/g, '');
     let messageText = "";
 
     if (action === 'welcome') {
@@ -52,23 +110,19 @@ serve(async (req) => {
       messageText = "🚀 Test successful! Your WhatsApp integration is working.";
     } else if (action === 'daily' || action === 'weekly') {
       if (!profile.google_access_token) {
-        return new Response(JSON.stringify({ error: "Google Account not connected. Please go to the dashboard and connect your account." }), { status: 400, headers: corsHeaders });
-      }
-      
-      try {
-        const items = await fetchAllItems(profile.google_access_token, action);
-        console.log(`[calendar-bot] Final items count for message: ${items.length}`);
-        messageText = formatUnifiedMessage(items, action);
-      } catch (err) {
-        console.error("[calendar-bot] Fetch Error:", err.message);
-        if (err.message.includes("401") || err.message.includes("UNAUTHENTICATED")) {
-          return new Response(JSON.stringify({ error: "Google session expired or permissions missing. Please reconnect your Google account in the dashboard." }), { status: 401, headers: corsHeaders });
+        messageText = "⚠️ Google Account not connected. Please go to the dashboard and connect your account.";
+      } else {
+        try {
+          const items = await fetchAllItems(profile.google_access_token, action);
+          messageText = formatUnifiedMessage(items, action);
+        } catch (err) {
+          console.error("[calendar-bot] Fetch Error:", err.message);
+          messageText = "❌ Error fetching your schedule. Your Google session might have expired. Please reconnect in the dashboard.";
         }
-        throw err;
       }
     }
 
-    const result = await sendWhatsAppMessage(cleanNumber, messageText);
+    const result = await sendWhatsAppMessage(targetNumber, messageText);
     return new Response(JSON.stringify(result), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
@@ -91,16 +145,9 @@ async function fetchAllItems(token: string, type: 'daily' | 'weekly'): Promise<U
   }
   const timeMax = timeMaxDate.toISOString();
 
-  // We use Promise.all but handle individual failures so one API doesn't block the other
   const [events, tasks] = await Promise.all([
-    fetchEventsFromAllCalendars(token, timeMin, timeMax).catch(e => {
-      console.error("[calendar-bot] Calendar fetch failed:", e);
-      return [];
-    }),
-    fetchTasksFromAllLists(token, timeMin, timeMax).catch(e => {
-      console.error("[calendar-bot] Tasks fetch failed:", e);
-      return [];
-    })
+    fetchEventsFromAllCalendars(token, timeMin, timeMax).catch(() => []),
+    fetchTasksFromAllLists(token, timeMin, timeMax).catch(() => [])
   ]);
 
   const allItems = [...events, ...tasks].sort((a, b) => a.start.getTime() - b.start.getTime());
@@ -120,12 +167,7 @@ async function fetchEventsFromAllCalendars(token: string, timeMin: string, timeM
     headers: { 'Authorization': `Bearer ${token}` }
   });
   
-  if (!listRes.ok) {
-    const errText = await listRes.text();
-    console.error("[calendar-bot] Calendar list fetch failed:", errText);
-    if (listRes.status === 401 || listRes.status === 403) throw new Error(`AUTH_ERROR: ${listRes.status}`);
-    return [];
-  }
+  if (!listRes.ok) return [];
   
   const listData = await listRes.json();
   const calendars = listData.items || [];
@@ -136,9 +178,7 @@ async function fetchEventsFromAllCalendars(token: string, timeMin: string, timeM
       const eventsRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
       if (!eventsRes.ok) continue;
-      
       const data = await eventsRes.json();
       (data.items || []).forEach((event: any) => {
         allEvents.push({
@@ -149,11 +189,8 @@ async function fetchEventsFromAllCalendars(token: string, timeMin: string, timeM
           allDay: !event.start.dateTime
         });
       });
-    } catch (e) {
-      console.error(`[calendar-bot] Error processing calendar ${cal.id}:`, e);
-    }
+    } catch (e) { console.error(e); }
   }
-  
   return allEvents;
 }
 
@@ -161,30 +198,16 @@ async function fetchTasksFromAllLists(token: string, timeMin: string, timeMax: s
   const listRes = await fetch('https://www.googleapis.com/tasks/v1/users/@me/lists', {
     headers: { 'Authorization': `Bearer ${token}` }
   });
-  
-  if (!listRes.ok) {
-    const errText = await listRes.text();
-    console.error("[calendar-bot] Task list fetch failed:", errText);
-    // If tasks fail due to permissions, we just return empty and let calendar events through
-    if (listRes.status === 401 || listRes.status === 403) {
-      console.warn("[calendar-bot] Tasks API access denied. Continuing with calendar only.");
-      return [];
-    }
-    return [];
-  }
-  
+  if (!listRes.ok) return [];
   const listData = await listRes.json();
   const taskLists = listData.items || [];
   const allTasks: UnifiedItem[] = [];
-  
   for (const list of taskLists) {
     try {
       const tasksRes = await fetch(`https://www.googleapis.com/tasks/v1/lists/${list.id}/tasks?showCompleted=false`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
       if (!tasksRes.ok) continue;
-      
       const data = await tasksRes.json();
       (data.items || []).forEach((task: any) => {
         if (task.due) {
@@ -196,11 +219,8 @@ async function fetchTasksFromAllLists(token: string, timeMin: string, timeMax: s
           });
         }
       });
-    } catch (e) {
-      console.error(`[calendar-bot] Error processing task list ${list.id}:`, e);
-    }
+    } catch (e) { console.error(e); }
   }
-  
   return allTasks;
 }
 
@@ -218,26 +238,13 @@ function formatUnifiedMessage(items: UnifiedItem[], type: 'daily' | 'weekly') {
   items.forEach((item) => {
     const start = item.start;
     const end = item.end;
-    
-    let timeStr = "";
-    if (item.allDay) {
-      timeStr = "All Day";
-    } else {
-      const startStr = start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-      const endStr = end ? end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : "";
-      timeStr = endStr ? `${startStr} - ${endStr}` : startStr;
-    }
-    
+    let timeStr = item.allDay ? "All Day" : `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}${end ? ' - ' + end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : ''}`;
     const weekday = start.toLocaleDateString('en-US', { weekday: 'long' });
     const dayMonth = start.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' }).replace(/\//g, '.');
-    
     const isToday = dayMonth === todayStr;
     const dateStr = (type === 'weekly' || !isToday) ? `${weekday} ${dayMonth} | ` : "";
-    const icon = item.type === 'task' ? "✅" : "•";
-    
-    msg += `${icon} ${dateStr}${timeStr}: ${item.title}\n`;
+    msg += `${item.type === 'task' ? '✅' : '•'} ${dateStr}${timeStr}: ${item.title}\n`;
   });
-
   return msg;
 }
 
@@ -245,16 +252,10 @@ async function sendWhatsAppMessage(to: string, text: string) {
   const key = Deno.env.get('WHATSAPP_API_KEY');
   const id = Deno.env.get('WHATSAPP_PHONE_NUMBER_ID');
   const url = `https://graph.facebook.com/v17.0/${id}/messages`;
-  
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to,
-      type: "text",
-      text: { body: text }
-    })
+    body: JSON.stringify({ messaging_product: "whatsapp", to, type: "text", text: { body: text } })
   });
   return await res.json();
 }
