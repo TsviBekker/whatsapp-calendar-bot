@@ -106,15 +106,17 @@ serve(async (req) => {
 
 async function fetchAllItems(token: string, type: 'daily' | 'weekly'): Promise<UnifiedItem[]> {
   const now = new Date();
-  const timeMin = new Date(now);
-  timeMin.setHours(0, 0, 0, 0); // Start of today
+  const timeMinDate = new Date(now);
+  timeMinDate.setHours(0, 0, 0, 0);
+  const timeMin = timeMinDate.toISOString();
   
-  const timeMax = new Date(timeMin);
-  timeMax.setDate(timeMax.getDate() + (type === 'daily' ? 2 : 8));
+  const timeMaxDate = new Date(timeMinDate);
+  timeMaxDate.setDate(timeMaxDate.getDate() + (type === 'daily' ? 2 : 9));
+  const timeMax = timeMaxDate.toISOString();
 
   const [events, tasks] = await Promise.all([
-    fetchEvents(token, timeMin.toISOString(), timeMax.toISOString()),
-    fetchTasks(token)
+    fetchEventsFromAllCalendars(token, timeMin, timeMax),
+    fetchTasksFromAllLists(token)
   ]);
 
   const allItems = [...events, ...tasks].sort((a, b) => a.start.getTime() - b.start.getTime());
@@ -123,47 +125,67 @@ async function fetchAllItems(token: string, type: 'daily' | 'weekly'): Promise<U
   if (type === 'daily') displayLimit.setHours(displayLimit.getHours() + 24);
   else displayLimit.setDate(displayLimit.getDate() + 7);
 
-  return allItems.filter(item => item.start >= timeMin && item.start <= displayLimit);
+  return allItems.filter(item => item.start >= timeMinDate && item.start <= displayLimit);
 }
 
-async function fetchEvents(token: string, timeMin: string, timeMax: string): Promise<UnifiedItem[]> {
-  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`, {
+async function fetchEventsFromAllCalendars(token: string, timeMin: string, timeMax: string): Promise<UnifiedItem[]> {
+  const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
     headers: { 'Authorization': `Bearer ${token}` }
   });
-  if (!res.ok) throw new Error("Google API Error");
-  const data = await res.json();
-  return (data.items || []).map((event: any) => ({
-    title: event.summary || "(No Title)",
-    start: new Date(event.start.dateTime || event.start.date),
-    end: event.end ? new Date(event.end.dateTime || event.end.date) : undefined,
-    type: 'event',
-    allDay: !event.start.dateTime
-  }));
-}
-
-async function fetchTasks(token: string): Promise<UnifiedItem[]> {
-  const res = await fetch('https://www.googleapis.com/tasks/v1/users/@me/lists', {
-    headers: { 'Authorization': `Bearer ${token}` }
-  });
-  if (!res.ok) return [];
-  const listData = await res.json();
-  const allTasks: UnifiedItem[] = [];
-  for (const list of (listData.items || [])) {
-    const tasksRes = await fetch(`https://www.googleapis.com/tasks/v1/lists/${list.id}/tasks?showCompleted=false`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    if (!tasksRes.ok) continue;
-    const data = await tasksRes.json();
-    (data.items || []).forEach((task: any) => {
-      if (task.due) {
-        allTasks.push({
-          title: task.title || "(No Title)",
-          start: new Date(task.due),
-          type: 'task',
-          allDay: true
+  
+  if (!listRes.ok) throw new Error("Google API Error");
+  
+  const listData = await listRes.json();
+  const calendars = listData.items || [];
+  const allEvents: UnifiedItem[] = [];
+  
+  for (const cal of calendars) {
+    try {
+      const eventsRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!eventsRes.ok) continue;
+      const data = await eventsRes.json();
+      (data.items || []).forEach((event: any) => {
+        allEvents.push({
+          title: event.summary || "(No Title)",
+          start: new Date(event.start.dateTime || event.start.date),
+          end: event.end ? new Date(event.end.dateTime || event.end.date) : undefined,
+          type: 'event',
+          allDay: !event.start.dateTime
         });
-      }
-    });
+      });
+    } catch (e) { console.error("[calendar-bot] Calendar fetch error:", e); }
+  }
+  return allEvents;
+}
+
+async function fetchTasksFromAllLists(token: string): Promise<UnifiedItem[]> {
+  const listRes = await fetch('https://www.googleapis.com/tasks/v1/users/@me/lists', {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!listRes.ok) return [];
+  const listData = await listRes.json();
+  const taskLists = listData.items || [];
+  const allTasks: UnifiedItem[] = [];
+  for (const list of taskLists) {
+    try {
+      const tasksRes = await fetch(`https://www.googleapis.com/tasks/v1/lists/${list.id}/tasks?showCompleted=false`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!tasksRes.ok) continue;
+      const data = await tasksRes.json();
+      (data.items || []).forEach((task: any) => {
+        if (task.due) {
+          allTasks.push({
+            title: task.title || "(No Title)",
+            start: new Date(task.due),
+            type: 'task',
+            allDay: true
+          });
+        }
+      });
+    } catch (e) { console.error("[calendar-bot] Task fetch error:", e); }
   }
   return allTasks;
 }
