@@ -36,7 +36,7 @@ const Dashboard = () => {
         
         if (!error) {
           setIsConnected(true);
-          showSuccess("Google Calendar connected!");
+          showSuccess("Google Account connected!");
         }
       }
     };
@@ -63,14 +63,15 @@ const Dashboard = () => {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          scopes: 'https://www.googleapis.com/auth/calendar.readonly',
+          // Added tasks.readonly scope
+          scopes: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks.readonly',
           redirectTo: window.location.origin + '/dashboard',
           queryParams: { access_type: 'offline', prompt: 'consent' }
         }
       });
       if (error) throw error;
     } catch (error) {
-      showError("Failed to connect Google Calendar.");
+      showError("Failed to connect Google Account.");
     }
   };
 
@@ -154,7 +155,7 @@ const Dashboard = () => {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <Card className="border-none shadow-sm">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-xs font-bold text-slate-400 uppercase tracking-widest">Google Calendar</CardTitle>
+                  <CardTitle className="text-xs font-bold text-slate-400 uppercase tracking-widest">Google Account</CardTitle>
                 </CardHeader>
                 <CardContent className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -275,14 +276,14 @@ const Dashboard = () => {
                 </div>
 
                 <div className="pt-6 border-t">
-                  <Label className="text-base font-semibold text-slate-700 block mb-2">Google Calendar Access</Label>
-                  <p className="text-sm text-slate-500 mb-6">We need read-only access to your primary calendar.</p>
+                  <Label className="text-base font-semibold text-slate-700 block mb-2">Google Account Access</Label>
+                  <p className="text-sm text-slate-500 mb-6">We need read-only access to your calendars and tasks.</p>
                   <Button 
                     variant={isConnected ? "outline" : "default"} 
                     onClick={handleConnectGoogle}
                     className="rounded-xl h-11 px-6"
                   >
-                    {isConnected ? "Reconnect Google Account" : "Connect Google Calendar"}
+                    {isConnected ? "Reconnect Google Account" : "Connect Google Account"}
                     <ExternalLink className="ml-2 w-4 h-4" />
                   </Button>
                 </div>
