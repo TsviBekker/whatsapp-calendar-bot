@@ -91,9 +91,16 @@ async function fetchAllItems(token: string, type: 'daily' | 'weekly'): Promise<U
   }
   const timeMax = timeMaxDate.toISOString();
 
+  // We use Promise.all but handle individual failures so one API doesn't block the other
   const [events, tasks] = await Promise.all([
-    fetchEventsFromAllCalendars(token, timeMin, timeMax),
-    fetchTasksFromAllLists(token, timeMin, timeMax)
+    fetchEventsFromAllCalendars(token, timeMin, timeMax).catch(e => {
+      console.error("[calendar-bot] Calendar fetch failed:", e);
+      return [];
+    }),
+    fetchTasksFromAllLists(token, timeMin, timeMax).catch(e => {
+      console.error("[calendar-bot] Tasks fetch failed:", e);
+      return [];
+    })
   ]);
 
   const allItems = [...events, ...tasks].sort((a, b) => a.start.getTime() - b.start.getTime());
@@ -116,7 +123,7 @@ async function fetchEventsFromAllCalendars(token: string, timeMin: string, timeM
   if (!listRes.ok) {
     const errText = await listRes.text();
     console.error("[calendar-bot] Calendar list fetch failed:", errText);
-    if (listRes.status === 401) throw new Error("401 UNAUTHENTICATED");
+    if (listRes.status === 401 || listRes.status === 403) throw new Error(`AUTH_ERROR: ${listRes.status}`);
     return [];
   }
   
@@ -158,7 +165,11 @@ async function fetchTasksFromAllLists(token: string, timeMin: string, timeMax: s
   if (!listRes.ok) {
     const errText = await listRes.text();
     console.error("[calendar-bot] Task list fetch failed:", errText);
-    if (listRes.status === 401) throw new Error("401 UNAUTHENTICATED");
+    // If tasks fail due to permissions, we just return empty and let calendar events through
+    if (listRes.status === 401 || listRes.status === 403) {
+      console.warn("[calendar-bot] Tasks API access denied. Continuing with calendar only.");
+      return [];
+    }
     return [];
   }
   

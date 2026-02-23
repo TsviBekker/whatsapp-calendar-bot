@@ -63,10 +63,13 @@ const Dashboard = () => {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          // Added tasks.readonly scope
+          // Requesting both Calendar and Tasks scopes
           scopes: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks.readonly',
           redirectTo: window.location.origin + '/dashboard',
-          queryParams: { access_type: 'offline', prompt: 'consent' }
+          queryParams: { 
+            access_type: 'offline', 
+            prompt: 'consent' // Force consent to ensure user can select new scopes
+          }
         }
       });
       if (error) throw error;
@@ -104,9 +107,14 @@ const Dashboard = () => {
     }
     setActionLoading(action);
     try {
-      const { error } = await supabase.functions.invoke('calendar-bot', { body: { action, userId: user?.id } });
+      const { data, error } = await supabase.functions.invoke('calendar-bot', { body: { action, userId: user?.id } });
       if (error) throw error;
-      showSuccess(`${action.charAt(0).toUpperCase() + action.slice(1)} schedule sent!`);
+      
+      if (data?.error) {
+        showError(data.error);
+      } else {
+        showSuccess(`${action.charAt(0).toUpperCase() + action.slice(1)} schedule sent!`);
+      }
     } catch (error) {
       showError(`Failed to send ${action} schedule.`);
     } finally {
