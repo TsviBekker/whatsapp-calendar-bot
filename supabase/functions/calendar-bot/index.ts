@@ -57,7 +57,7 @@ serve(async (req) => {
       
       try {
         const items = await fetchAllItems(profile.google_access_token, action);
-        console.log(`[calendar-bot] Total items found: ${items.length}`);
+        console.log(`[calendar-bot] Final items count for message: ${items.length}`);
         messageText = formatUnifiedMessage(items, action);
       } catch (err) {
         console.error("[calendar-bot] Fetch Error:", err.message);
@@ -69,7 +69,6 @@ serve(async (req) => {
     }
 
     const result = await sendWhatsAppMessage(cleanNumber, messageText);
-    console.log("[calendar-bot] WhatsApp result:", JSON.stringify(result));
     return new Response(JSON.stringify(result), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
@@ -80,17 +79,22 @@ serve(async (req) => {
 
 async function fetchAllItems(token: string, type: 'daily' | 'weekly'): Promise<UnifiedItem[]> {
   const now = new Date();
-  // Set timeMin to the start of the current day in UTC to be safe
+  
+  // Start from the beginning of today (UTC)
   const timeMinDate = new Date(now);
-  timeMinDate.setHours(0, 0, 0, 0);
+  timeMinDate.setUTCHours(0, 0, 0, 0);
   const timeMin = timeMinDate.toISOString();
   
-  const end = new Date(timeMinDate);
-  if (type === 'daily') end.setDate(end.getDate() + 2); // Fetch 48h to be safe with timezones
-  else end.setDate(end.getDate() + 8);
-  const timeMax = end.toISOString();
+  // Fetch a generous window to avoid timezone edge cases
+  const timeMaxDate = new Date(timeMinDate);
+  if (type === 'daily') {
+    timeMaxDate.setUTCDate(timeMaxDate.getUTCDate() + 2); // 48 hours
+  } else {
+    timeMaxDate.setUTCDate(timeMaxDate.getUTCDate() + 9); // 9 days
+  }
+  const timeMax = timeMaxDate.toISOString();
 
-  console.log(`[calendar-bot] Fetching from ${timeMin} to ${timeMax}`);
+  console.log(`[calendar-bot] Fetching window: ${timeMin} to ${timeMax}`);
 
   const [events, tasks] = await Promise.all([
     fetchEventsFromAllCalendars(token, timeMin, timeMax),
@@ -99,12 +103,20 @@ async function fetchAllItems(token: string, type: 'daily' | 'weekly'): Promise<U
 
   const allItems = [...events, ...tasks].sort((a, b) => a.start.getTime() - b.start.getTime());
   
-  // Filter to only include items within the requested window relative to "now"
-  const limit = new Date(now);
-  if (type === 'daily') limit.setHours(limit.getHours() + 24);
-  else limit.setDate(limit.getDate() + 7);
+  // Define the actual display window
+  const displayLimit = new Date(now);
+  if (type === 'daily') {
+    displayLimit.setUTCHours(displayLimit.getUTCHours() + 24);
+  } else {
+    displayLimit.setUTCDate(displayLimit.getUTCDate() + 7);
+  }
 
-  return allItems.filter(item => item.start >= timeMinDate && item.start <= limit);
+  // Filter items to be within the next 24h (daily) or 7d (weekly)
+  // We include items that started today even if they are in the past
+  return allItems.filter(item => {
+    const isWithinWindow = item.start >= timeMinDate && item.start <= displayLimit;
+    return isWithinWindow;
+  });
 }
 
 async function fetchEventsFromAllCalendars(token: string, timeMin: string, timeMax: string): Promise<UnifiedItem[]> {
@@ -113,29 +125,30 @@ async function fetchEventsFromAllCalendars(token: string, timeMin: string, timeM
   });
   
   if (!listRes.ok) {
-    console.error("[calendar-bot] Failed to fetch calendar list:", await listRes.text());
+    console.error("[calendar-bot] Calendar list fetch failed:", await listRes.text());
     return [];
   }
   
   const listData = await listRes.json();
   const calendars = listData.items || [];
-  console.log(`[calendar-bot] Found ${calendars.length} calendars`);
+  console.log(`[calendar-bot] Found ${calendars.length} calendars in list`);
 
   const allEvents: UnifiedItem[] = [];
-  await Promise.all(calendars.map(async (cal: any) => {
+  
+  for (const cal of calendars) {
     try {
       const eventsRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
       if (!eventsRes.ok) {
-        console.warn(`[calendar-bot] Failed to fetch events for ${cal.id}:`, await eventsRes.text());
-        return;
+        console.warn(`[calendar-bot] Could not fetch events for calendar ${cal.summary} (${cal.id})`);
+        continue;
       }
       
       const data = await eventsRes.json();
       const items = data.items || [];
-      console.log(`[calendar-bot] Calendar ${cal.summary}: ${items.length} events`);
+      console.log(`[calendar-bot] Calendar "${cal.summary}": found ${items.length} events`);
       
       items.forEach((event: any) => {
         allEvents.push({
@@ -147,9 +160,9 @@ async function fetchEventsFromAllCalendars(token: string, timeMin: string, timeM
         });
       });
     } catch (e) {
-      console.error(`[calendar-bot] Error fetching calendar ${cal.id}:`, e);
+      console.error(`[calendar-bot] Error processing calendar ${cal.id}:`, e);
     }
-  }));
+  }
   
   return allEvents;
 }
@@ -161,7 +174,7 @@ async function fetchTasksFromAllLists(token: string, timeMin: string, timeMax: s
     });
     
     if (!listRes.ok) {
-      console.error("[calendar-bot] Failed to fetch task lists:", await listRes.text());
+      console.error("[calendar-bot] Task list fetch failed:", await listRes.text());
       return [];
     }
     
@@ -170,35 +183,35 @@ async function fetchTasksFromAllLists(token: string, timeMin: string, timeMax: s
     console.log(`[calendar-bot] Found ${taskLists.length} task lists`);
 
     const allTasks: UnifiedItem[] = [];
-    await Promise.all(taskLists.map(async (list: any) => {
+    
+    for (const list of taskLists) {
       try {
-        const tasksRes = await fetch(`https://www.googleapis.com/tasks/v1/lists/${list.id}/tasks?dueMin=${timeMin}&dueMax=${timeMax}&showCompleted=false`, {
+        // Note: Tasks API doesn't support dueMin/dueMax directly in the same way as Calendar
+        // We fetch all and filter manually to be safe
+        const tasksRes = await fetch(`https://www.googleapis.com/tasks/v1/lists/${list.id}/tasks?showCompleted=false`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         
-        if (!tasksRes.ok) {
-          console.warn(`[calendar-bot] Failed to fetch tasks for ${list.id}:`, await tasksRes.text());
-          return;
-        }
+        if (!tasksRes.ok) continue;
         
         const data = await tasksRes.json();
         const items = data.items || [];
-        console.log(`[calendar-bot] Task List ${list.title}: ${items.length} tasks`);
         
         items.forEach((task: any) => {
           if (task.due) {
+            const dueDate = new Date(task.due);
             allTasks.push({
               title: task.title || "(No Title)",
-              start: new Date(task.due),
+              start: dueDate,
               type: 'task',
               allDay: true
             });
           }
         });
       } catch (e) {
-        console.error(`[calendar-bot] Error fetching task list ${list.id}:`, e);
+        console.error(`[calendar-bot] Error processing task list ${list.id}:`, e);
       }
-    }));
+    }
     
     return allTasks;
   } catch (e) {
